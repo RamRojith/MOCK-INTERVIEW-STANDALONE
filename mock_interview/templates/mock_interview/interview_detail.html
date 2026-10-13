@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h4 class="fw-bold mb-0"><i class="fas fa-info-circle me-2"></i>{{ interview.title }}</h4>
+            <div>
+                <a href="{% url 'mock_interview:interview_performance_page' interview_id=interview.id %}" class="btn btn-outline-success me-2">
+                    <i class="fas fa-chart-bar me-1"></i>Performance
+                </a>
+                <a href="{% url 'mock_interview:faculty_dashboard' %}" class="btn btn-outline-secondary">
+                    <i class="fas fa-arrow-left me-1"></i>Back
+                </a>
+            </div>
+        </div>
+
+        <div class="content-card mb-4">
+            <div class="row">
+                <div class="col-md-6">
+                    <p><strong>Subject:</strong> {{ interview.subject_code }}</p>
+                    <p><strong>Chapter:</strong> {{ interview.chapter|default:"-" }}</p>
+                    <p><strong>Difficulty:</strong> {{ interview.get_difficulty_display }}</p>
+                    <p><strong>Mode:</strong> {{ interview.get_interview_mode_display }}</p>
+                </div>
+                <div class="col-md-6">
+                    <p><strong>Status:</strong>
+                        <span class="badge bg-{% if interview.status == 'open' %}success{% elif interview.status == 'scheduled' %}info{% elif interview.status == 'completed' %}secondary{% else %}warning{% endif %}">
+                            {{ interview.get_status_display }}
+                        </span>
+                    </p>
+                    <p><strong>Questions:</strong> {{ interview.question_count }}</p>
+                    <p><strong>Duration:</strong> {{ interview.duration_minutes }} minutes</p>
+                    <p><strong>Assigned Students:</strong> {{ assignments.count }}</p>
+                </div>
+            </div>
+            {% if interview.start_time %}
+            <hr>
+            <p><strong>Schedule:</strong>
+                {{ interview.start_time|date:"M d, Y H:i" }} - {{ interview.end_time|date:"M d, Y H:i" }}
+            </p>
+            {% endif %}
+            <hr>
+            <p><strong>Auto-Assignment Filter:</strong>
+                Dept: {{ interview.target_department.Department|default:"All" }} |
+                Batch: {{ interview.target_batch|default:"All" }} |
+                Section: {{ interview.target_section|default:"All" }}
+            </p>
+        </div>
+
+        {% if interview.status == 'draft' %}
+        <div class="content-card mb-4">
+            <h5 class="fw-bold mb-3">Schedule Interview</h5>
+            <form id="scheduleForm">
+                {% csrf_token %}
+                <div class="row g-2">
+                    <div class="col-md-5">
+                        <label class="form-label">Start Time</label>
+                        <input type="datetime-local" class="form-control" id="startTime" required>
+                    </div>
+                    <div class="col-md-5">
+                        <label class="form-label">End Time</label>
+                        <input type="datetime-local" class="form-control" id="endTime" required>
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button type="submit" class="btn btn-info w-100">Schedule</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+        {% endif %}
+
+        <div class="content-card">
+            <h5 class="fw-bold mb-3">Assign Students</h5>
+            <form id="assignForm" class="mb-3">
+                {% csrf_token %}
+                <div class="input-group">
+                    <input type="text" class="form-control" id="studentIds"
+                           placeholder="Enter student Employee IDs (comma-separated)">
+                    <button type="submit" class="btn btn-primary">Add Manually</button>
+                </div>
+            </form>
+
+            {% if assignments %}
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Student ID</th>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Assigned</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for a in assignments %}
+                        <tr>
+                            <td>{{ a.student_employee_id }}</td>
+                            <td>{{ a.student_name|default:"-" }}</td>
+                            <td>
+                                {% if a.status == 'completed' or a.session.status == 'completed' or a.session.status == 'evaluating' or a.session.status == 'report_ready' %}
+                                    <span class="badge bg-success">Completed</span>
+                                {% elif a.status == 'in_progress' %}
+                                    <span class="badge bg-warning">In Progress</span>
+                                {% elif a.status == 'expired' %}
+                                    <span class="badge bg-danger">Expired</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">{{ a.get_status_display }}</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ a.assigned_at|date:"M d, Y H:i" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-muted">No students assigned yet.</p>
+            {% endif %}
+            <div id="assignResult" class="mt-3 d-none">
+                <div id="assignResultContent"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('scheduleForm')?.addEventListener('submit', e => {
+    e.preventDefault();
+    fetch('{% url "mock_interview:schedule_interview_api" interview.id %}', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': '{{ csrf_token }}'
+        },
+        body: JSON.stringify({
+            start_time: document.getElementById('startTime').value,
+            end_time: document.getElementById('endTime').value,
+        })
+    }).then(r => r.json().then(d => ({status: r.status, data: d})))
+      .then(({status, data}) => {
+        if (status === 200) location.reload();
+        else alert(data.error || 'Failed');
+    });
+});
+
+document.getElementById('assignForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const raw = document.getElementById('studentIds').value;
+    const ids = raw.split(',').map(s => s.trim()).filter(Boolean);
+    if (!ids.length) return;
+
+    const resultDiv = document.getElementById('assignResult');
+    const resultContent = document.getElementById('assignResultContent');
+
+    fetch('{% url "mock_interview:assign_interview_api" interview.id %}', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': '{{ csrf_token }}'
+        },
+        body: JSON.stringify({student_ids: ids})
+    }).then(r => r.json().then(d => ({status: r.status, data: d})))
+      .then(({status, data}) => {
+        if (status === 200) {
+            if (data.results) {
+                let html = '';
+                const errors = data.results.filter(r => r.status !== 'assigned');
+                const successes = data.results.filter(r => r.status === 'assigned');
+
+                if (successes.length) {
+                    html += '<div class="alert alert-success mb-2"><i class="fas fa-check-circle me-1"></i>' +
+                        successes.length + ' student(s) assigned successfully.</div>';
+                }
+                if (errors.length) {
+                    html += '<div class="alert alert-danger mb-1"><i class="fas fa-exclamation-circle me-1"></i><strong>Some students could not be assigned:</strong></div>';
+                    html += '<ul class="list-unstyled mb-0">';
+                    errors.forEach(r => {
+                        html += '<li class="text-danger small mb-1"><i class="fas fa-times me-1"></i> <strong>' + r.student_id + '</strong>: ' + r.message + '</li>';
+                    });
+                    html += '</ul>';
+                }
+                resultContent.innerHTML = html;
+                resultDiv.classList.remove('d-none');
+
+                if (successes.length) {
+                    setTimeout(() => location.reload(), 1500);
+                }
+            } else {
+                location.reload();
+            }
+        } else {
+            resultContent.innerHTML = '<div class="alert alert-danger mb-0"><i class="fas fa-exclamation-circle me-1"></i>' +
+                (data.error || 'Failed to assign students.') + '</div>';
+            resultDiv.classList.remove('d-none');
+        }
+    });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% load static %}
+{% load user_tags %}
+{% block content %}
+{% if request.user|is_hod %}
+<div class="content-card mb-4 border-info">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+        <div class="d-flex align-items-center gap-3">
+            <i class="fas fa-chart-pie fa-2x text-info"></i>
+            <div>
+                <h5 class="fw-bold mb-0">HOD Mock Interview Reports</h5>
+                <p class="text-muted mb-0 small">View mock interview performance and reports across all students in your department.</p>
+            </div>
+        </div>
+        <a href="{% url 'mock_interview:hod_reports' %}" class="btn btn-primary">
+            <i class="fas fa-chart-bar me-1"></i>Open HOD Reports
+        </a>
+    </div>
+</div>
+{% endif %}
+
+{% if request.user|is_roster_user %}
+<div class="content-card mb-4 border-success">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+        <div class="d-flex align-items-center gap-3">
+            <i class="fas fa-user-graduate fa-2x text-success"></i>
+            <div>
+                <h5 class="fw-bold mb-0">Mentor / Class Advisor Mock Interview Reports</h5>
+                <p class="text-muted mb-0 small">View mock interview performance and reports for the students assigned to you (mentees / class roster).</p>
+            </div>
+        </div>
+        <a href="{% url 'mock_interview:mentor_ca_reports' %}" class="btn btn-success">
+            <i class="fas fa-chart-bar me-1"></i>Open Mentor Reports
+        </a>
+    </div>
+</div>
+{% endif %}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="fw-bold mb-0"><i class="fas fa-chalkboard-teacher me-2"></i>Faculty Dashboard</h4>
+    <div>
+        <a href="{% url 'mock_interview:upload_document_page' %}" class="btn btn-primary">
+            <i class="fas fa-upload me-1"></i>Upload Document
+        </a>
+        <a href="{% url 'mock_interview:create_interview_page' %}" class="btn btn-success ms-2">
+            <i class="fas fa-plus me-1"></i>Create Interview
+        </a>
+    </div>
+</div>
+
+<div id="healthBanner" class="alert alert-warning d-none" role="alert">
+    <i class="fas fa-exclamation-triangle me-2"></i>
+    <span id="healthText">Checking system status...</span>
+</div>
+
+<div class="content-card mb-4">
+    <h5 class="fw-bold mb-3"><i class="fas fa-file-alt me-2"></i>Uploaded Documents</h5>
+    <div class="row g-3">
+        {% for doc in documents %}
+        <div class="col-md-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6 class="card-title">{{ doc.original_filename }}</h6>
+                    <p class="text-muted small mb-1">
+                        <i class="fas fa-book me-1"></i>{{ doc.subject_code }}
+                        {% if doc.chapter %} - {{ doc.chapter }}{% endif %}
+                    </p>
+                    <p class="small mb-2">
+                        <span class="badge bg-{% if doc.status == 'ready' %}success{% elif doc.status == 'processing' %}warning{% elif doc.status == 'failed' %}danger{% else %}secondary{% endif %}">
+                            {{ doc.get_status_display }}
+                        </span>
+                        {% if doc.chunk_count %}<span class="ms-2 text-muted">{{ doc.chunk_count }} chunks</span>{% endif %}
+                    </p>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteDocument('{{ doc.id }}')">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+        {% empty %}
+        <div class="col-12">
+            <div class="alert alert-info mb-0">No documents uploaded yet. Upload your first document to get started.</div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="content-card">
+    <h5 class="fw-bold mb-3"><i class="fas fa-microphone me-2"></i>Mock Interviews</h5>
+    <div class="row g-3">
+        {% for interview in interviews %}
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <h6 class="card-title">{{ interview.title }}</h6>
+                        <span class="badge bg-{% if interview.status == 'open' %}success{% elif interview.status == 'scheduled' %}info{% elif interview.status == 'completed' %}secondary{% else %}warning{% endif %}">
+                            {{ interview.get_status_display }}
+                        </span>
+                    </div>
+                    <p class="text-muted small mb-1">
+                        <i class="fas fa-book me-1"></i>{{ interview.subject_code }}
+                        <span class="ms-2"><i class="fas fa-layer-group me-1"></i>{{ interview.get_difficulty_display }}</span>
+                    </p>
+                    <p class="small mb-2">
+                        <i class="fas fa-clock me-1"></i>{{ interview.question_count }} questions, {{ interview.duration_minutes }} min
+                    </p>
+                    {% if interview.start_time %}
+                    <p class="small mb-2">
+                        <i class="fas fa-calendar me-1"></i>
+                        {{ interview.start_time|date:"M d, Y H:i" }} - {{ interview.end_time|date:"M d, Y H:i" }}
+                    </p>
+                    {% endif %}
+                    <div class="d-flex gap-2">
+                        <a href="{% url 'mock_interview:interview_detail_page' interview.id %}" class="btn btn-sm btn-outline-primary">
+                            <i class="fas fa-eye me-1"></i>View Details
+                        </a>
+                        <button class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteModal"
+                            data-id="{{ interview.id }}"
+                            data-title="{{ interview.title }}"
+                            data-subject="{{ interview.subject_code }}">
+                            <i class="fas fa-trash me-1"></i>Delete
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% empty %}
+        <div class="col-12">
+            <div class="alert alert-info mb-0">No interviews created yet. Create your first interview to get started.</div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title"><i class="fas fa-exclamation-triangle me-2"></i>Delete Mock Interview</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-3">Are you sure you want to delete this mock interview?</p>
+                <div class="mb-2">
+                    <strong>Interview Title:</strong>
+                    <span id="deleteInterviewTitle" class="text-break"></span>
+                </div>
+                <div class="mb-3">
+                    <strong>Subject:</strong>
+                    <span id="deleteInterviewSubject"></span>
+                </div>
+                <p class="text-muted mb-0"><i class="fas fa-info-circle me-1"></i>This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    <i class="fas fa-ban me-1"></i>Cancel
+                </button>
+                <button type="button" class="btn btn-danger" id="confirmDeleteBtn">
+                    <i class="fas fa-trash-alt me-1"></i>Delete
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function deleteDocument(docId) {
+    if (!confirm('Are you sure you want to delete this document?')) return;
+    fetch(`/mock-interview/faculty/api/documents/${docId}/delete/`, {
+        method: 'POST',
+        headers: {'X-CSRFToken': '{{ csrf_token }}'}
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'deleted') location.reload();
+        else alert(data.error || 'Delete failed');
+    });
+}
+
+let deleteModalEl = document.getElementById('deleteModal');
+let deleteInterviewId = null;
+
+if (deleteModalEl) {
+    deleteModalEl.addEventListener('show.bs.modal', function (event) {
+        let button = event.relatedTarget;
+        deleteInterviewId = button.getAttribute('data-id');
+        document.getElementById('deleteInterviewTitle').textContent = button.getAttribute('data-title');
+        document.getElementById('deleteInterviewSubject').textContent = button.getAttribute('data-subject');
+    });
+}
+
+document.getElementById('confirmDeleteBtn')?.addEventListener('click', function () {
+    if (!deleteInterviewId) return;
+    let btn = this;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Deleting...';
+    fetch(`/mock-interview/faculty/api/interview/${deleteInterviewId}/delete/`, {
+        method: 'POST',
+        headers: {'X-CSRFToken': '{{ csrf_token }}'}
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'deleted') {
+            location.reload();
+        } else {
+            alert(data.error || 'Unable to delete the interview.');
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-trash-alt me-1"></i>Delete';
+            let modal = bootstrap.Modal.getInstance(deleteModalEl);
+            if (modal) modal.hide();
+        }
+    }).catch(() => {
+        alert('Unable to delete the interview. Please try again later.');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-trash-alt me-1"></i>Delete';
+        let modal = bootstrap.Modal.getInstance(deleteModalEl);
+        if (modal) modal.hide();
+    });
+});
+
+function checkSystemHealth() {
+    fetch('{% url "mock_interview:faculty_runtime_status" %}', {
+        headers: {'X-CSRFToken': '{{ csrf_token }}'}
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.ready) {
+            const issues = [];
+            if (data.components && !data.components.rag) issues.push('Vector Database (Qdrant)');
+            if (data.components && !data.components.ollama) issues.push('AI Model Server (Ollama)');
+            document.getElementById('healthText').textContent =
+                'System warning: ' + issues.join(', ') + ' unavailable. Document upload may fail.';
+            document.getElementById('healthBanner').classList.remove('d-none');
+        }
+    })
+    .catch(() => {});
+}
+
+checkSystemHealth();
+</script>
+{% endblock %}

@@ -1,0 +1,139 @@
+{% comment %}
+Shared mock interview report content used by both the faculty report detail
+page and the HOD report detail page. Expects in context:
+  session  - InterviewSession
+  report   - InterviewReport or None
+  questions- evaluated questions list (or empty)
+{% endcomment %}
+<p class="text-muted mb-4">{{ session.student_employee_id }} &middot; {{ session.interview_round }} &middot; {{ session.difficulty }}</p>
+
+{% if report %}
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Overall Score</div>
+                <div class="display-6 fw-bold text-primary">{{ report.overall_score }}</div>
+                <div class="text-muted">/100</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Content</div>
+                <div class="display-6 fw-bold text-success">{{ report.technical_score }}</div>
+                <div class="text-muted">/100</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Communication</div>
+                <div class="display-6 fw-bold text-info">{{ report.communication_score }}</div>
+                <div class="text-muted">/100</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="content-card mb-4">
+    <h5 class="fw-bold mb-2">Summary</h5>
+    <p class="mb-0">{{ report.summary }}</p>
+</div>
+
+{% if report.strengths %}
+<div class="row g-3 mb-4">
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="fw-bold text-success"><i class="fas fa-check-circle me-1"></i>Strengths</h5>
+                <ul class="mb-0">{% for item in report.strengths %}<li>{{ item }}</li>{% endfor %}</ul>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="fw-bold text-danger"><i class="fas fa-exclamation-triangle me-1"></i>Improvement Areas</h5>
+                <ul class="mb-0">{% for item in report.improvement_areas %}<li>{{ item }}</li>{% endfor %}</ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if report.learning_plan %}
+<div class="content-card mb-4">
+    <h5 class="fw-bold"><i class="fas fa-road me-1"></i>Learning Plan</h5>
+    <ol class="mb-0">{% for item in report.learning_plan %}<li>{{ item }}</li>{% endfor %}</ol>
+</div>
+{% endif %}
+
+{% with swot=report.swot_analysis %}
+{% if swot.strengths or swot.weaknesses or swot.opportunities or swot.threats %}
+<div class="content-card mb-4">
+    <h5 class="fw-bold mb-1"><i class="fas fa-th-large me-1"></i>SWOT Analysis</h5>
+    <p class="small text-muted mb-3">Strengths and Weaknesses reflect this interview; Opportunities and Threats look ahead to future interviews. Practice guidance only — not a placement or hiring decision.</p>
+    <div class="row g-3">
+        <div class="col-md-6"><div class="border rounded h-100 p-3">
+            <h6 class="fw-bold text-success">Strengths</h6>
+            <ul class="mb-0 small">{% for item in swot.strengths %}<li>{{ item }}</li>{% empty %}<li>&mdash;</li>{% endfor %}</ul>
+        </div></div>
+        <div class="col-md-6"><div class="border rounded h-100 p-3">
+            <h6 class="fw-bold text-danger">Weaknesses</h6>
+            <ul class="mb-0 small">{% for item in swot.weaknesses %}<li>{{ item }}</li>{% empty %}<li>&mdash;</li>{% endfor %}</ul>
+        </div></div>
+        <div class="col-md-6"><div class="border rounded h-100 p-3">
+            <h6 class="fw-bold text-primary">Opportunities</h6>
+            <ul class="mb-0 small">{% for item in swot.opportunities %}<li>{{ item }}</li>{% empty %}<li>&mdash;</li>{% endfor %}</ul>
+        </div></div>
+        <div class="col-md-6"><div class="border rounded h-100 p-3">
+            <h6 class="fw-bold text-warning">Threats</h6>
+            <ul class="mb-0 small">{% for item in swot.threats %}<li>{{ item }}</li>{% empty %}<li>&mdash;</li>{% endfor %}</ul>
+        </div></div>
+    </div>
+</div>
+{% endif %}
+{% endwith %}
+
+{% if questions %}
+<div class="content-card">
+    <h5 class="fw-bold mb-3"><i class="fas fa-list-ol me-2"></i>Question-by-Question Analysis</h5>
+    <div class="accordion" id="qAccordion">
+        {% for q in questions %}
+        <div class="accordion-item">
+            <h2 class="accordion-header">
+                <button class="accordion-button {% if not forloop.first %}collapsed{% endif %}" type="button" data-bs-toggle="collapse" data-bs-target="#fq{{ q.pk }}">
+                    <span class="badge bg-primary me-2">{{ q.answer.evaluation.total_score }}/100</span>
+                    Q{{ q.sequence_number }}: {{ q.question_text|truncatewords:15 }}
+                </button>
+            </h2>
+            <div id="fq{{ q.pk }}" class="accordion-collapse collapse {% if forloop.first %}show{% endif %}" data-bs-parent="#qAccordion">
+                <div class="accordion-body">
+                    <p><strong>Transcript:</strong></p>
+                    <p class="bg-light p-3 rounded">{{ q.answer.corrected_transcript }}</p>
+                    <p><strong>Dimension Scores:</strong></p>
+                    <ul>{% for name, score in q.answer.evaluation.dimension_scores.items %}<li>{{ name|title }}: {{ score }}/10</li>{% endfor %}</ul>
+                    {% if q.answer.evaluation.strengths %}
+                        <p><strong>Strengths:</strong></p>
+                        <ul>{% for s in q.answer.evaluation.strengths %}<li>{{ s }}</li>{% endfor %}</ul>
+                    {% endif %}
+                    {% if q.answer.evaluation.improvement_actions %}
+                        <p><strong>Improvements:</strong></p>
+                        <ul>{% for a in q.answer.evaluation.improvement_actions %}<li>{{ a }}</li>{% endfor %}</ul>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="alert alert-info">
+    <i class="fas fa-info-circle me-2"></i>This interview has not been completed yet or the report is still being generated.
+</div>
+{% endif %}

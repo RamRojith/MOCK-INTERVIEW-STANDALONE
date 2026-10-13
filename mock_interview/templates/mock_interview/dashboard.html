@@ -1,0 +1,1143 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+
+<style>
+  /* ==========================================================================
+     Student Mock Interview Dashboard — ERP-aligned redesign
+     Reuses the ERP design tokens from templates/base.html (--rit-* variables,
+     Bootstrap grid + buttons + badges) and adds dashboard-scoped components.
+     ========================================================================== */
+  .mi-dashboard {
+    --mi-blue: var(--rit-primary, #1a4b8c);
+    --mi-indigo: #4f46e5;
+    --mi-amber: #f59e0b;
+    --mi-purple: #7c3aed;
+    --mi-cyan: #0ea5e9;
+    --mi-green: #16a34a;
+    --mi-red: #dc3545;
+    --mi-ink: #1e293b;
+    --mi-muted: #64748b;
+    --mi-border: var(--rit-border, #e2e8f0);
+    --mi-shadow: var(--rit-shadow);
+    --mi-shadow-lg: var(--rit-shadow-lg);
+  }
+
+  .mi-min-0 { min-width: 0; }
+
+  .mi-section { margin-bottom: 1.75rem; scroll-margin-top: 96px; }
+
+  .mi-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+  }
+
+  .mi-section-title {
+    display: inline-flex;
+    align-items: center;
+    gap: .65rem;
+    font-weight: 700;
+    font-size: 1.02rem;
+    color: var(--rit-dark);
+    margin: 0;
+    letter-spacing: -.2px;
+  }
+
+  .mi-section-icon {
+    width: 36px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    font-size: .95rem;
+    flex-shrink: 0;
+  }
+
+  .mi-icon-blue   { background: rgba(26, 75, 140, .12);  color: var(--rit-primary); }
+  .mi-icon-amber  { background: rgba(248, 183, 57, .18); color: #b8860b; }
+  .mi-icon-green  { background: rgba(40, 167, 69, .12);  color: var(--rit-success); }
+  .mi-icon-indigo { background: rgba(79, 70, 229, .12);  color: #4f46e5; }
+  .mi-icon-purple { background: rgba(124, 58, 237, .12); color: #7c3aed; }
+  .mi-icon-cyan   { background: rgba(14, 165, 233, .12); color: #0ea5e9; }
+
+  /* Consistent button height / radius inside the dashboard */
+  .mi-dashboard .btn {
+    --bs-btn-padding-y: .45rem;
+    --bs-btn-padding-x: 1rem;
+    --bs-btn-font-size: .85rem;
+    border-radius: 10px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    white-space: nowrap;
+  }
+
+  /* =============================================================
+     1. HERO HEADER
+     ============================================================= */
+  .mi-hero {
+    position: relative;
+    overflow: hidden;
+    border-radius: 18px;
+    background: linear-gradient(120deg, #1a4b8c 0%, #2c5aa0 55%, #2694ff 100%);
+    color: #fff;
+    padding: 1.6rem 1.75rem;
+    margin-bottom: 1.75rem;
+    box-shadow: 0 12px 28px rgba(26, 75, 140, .28);
+  }
+
+  .mi-hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(circle at 85% -20%, rgba(255, 255, 255, .16), transparent 45%),
+      radial-gradient(circle at 0% 120%, rgba(248, 183, 57, .22), transparent 42%);
+    pointer-events: none;
+  }
+
+  .mi-hero .row { position: relative; }
+
+  .mi-hero-greeting { font-size: 1rem; opacity: .95; margin-bottom: .3rem; }
+  .mi-hero-greeting strong { color: var(--rit-secondary); font-weight: 700; }
+
+  .mi-hero-title {
+    font-weight: 800;
+    font-size: clamp(1.35rem, 2.6vw, 1.7rem);
+    letter-spacing: -.4px;
+    margin: 0;
+    line-height: 1.2;
+  }
+
+  .mi-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    background: rgba(255, 255, 255, .14);
+    border: 1px solid rgba(255, 255, 255, .18);
+    color: #fff;
+    font-size: .78rem;
+    font-weight: 600;
+    padding: .32rem .75rem;
+    border-radius: 999px;
+    backdrop-filter: blur(4px);
+    white-space: nowrap;
+  }
+
+  .mi-hero-stats { gap: 1.4rem; }
+
+  .mi-ring-block { position: relative; width: 96px; height: 96px; flex-shrink: 0; }
+  .mi-ring { width: 96px; height: 96px; transform: rotate(-90deg); }
+  .mi-ring-track { fill: none; stroke: rgba(255, 255, 255, .22); stroke-width: 9; }
+  .mi-ring-value {
+    fill: none;
+    stroke: var(--rit-secondary);
+    stroke-width: 9;
+    stroke-linecap: round;
+    transition: stroke-dashoffset .8s cubic-bezier(.4, 0, .2, 1);
+  }
+  .mi-ring-text {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .mi-ring-pct { font-size: 1.3rem; font-weight: 800; line-height: 1; }
+  .mi-ring-label { font-size: .62rem; opacity: .85; text-transform: uppercase; letter-spacing: .6px; margin-top: 2px; }
+
+  .mi-hero-stat { text-align: center; padding-left: 1.4rem; border-left: 1px solid rgba(255, 255, 255, .22); }
+  .mi-hero-stat-label {
+    display: block;
+    font-size: .66rem;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    opacity: .85;
+    margin-bottom: .2rem;
+  }
+  .mi-hero-stat-value { display: block; font-size: 1.15rem; font-weight: 700; color: var(--rit-secondary); }
+
+  /* =============================================================
+     2. QUICK ACTIONS
+     ============================================================= */
+  .mi-qa-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
+
+  .mi-qa-tile {
+    display: flex;
+    align-items: flex-start;
+    gap: .85rem;
+    border: 1px solid var(--mi-border);
+    border-radius: 14px;
+    padding: 1.1rem 1rem;
+    text-decoration: none;
+    height: 100%;
+    box-shadow: var(--mi-shadow);
+    transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease, background .25s ease;
+  }
+
+  .mi-qa-tile:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--mi-shadow-lg);
+  }
+
+  .mi-qa-tile:focus-visible {
+    outline: 3px solid rgba(26, 75, 140, .35);
+    outline-offset: 2px;
+  }
+
+  .mi-qa-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.35rem;
+    flex-shrink: 0;
+  }
+
+  .mi-qa-body { flex: 1 1 auto; min-width: 0; }
+  .mi-qa-title { font-weight: 700; font-size: .95rem; color: var(--rit-dark); margin: 0 0 2px; line-height: 1.25; }
+  .mi-qa-desc { color: var(--mi-muted); font-size: .78rem; margin: 0; line-height: 1.4; }
+
+  .mi-qa-arrow { color: #cbd5e1; font-size: .8rem; margin-top: 6px; transition: color .2s ease, transform .2s ease; }
+
+  .mi-qa-tile:hover .mi-qa-arrow { color: var(--rit-primary); transform: translateX(3px); }
+
+  /* Accent variants (soft coloured backgrounds, ERP palette) */
+  .mi-qa-tile.tile-blue   { background: linear-gradient(135deg, #eef4fb, #e2edf9); border-color: #c9dbf0; }
+  .mi-qa-tile.tile-blue:hover   { border-color: var(--rit-primary); }
+  .mi-qa-tile.tile-blue .mi-qa-icon   { background: rgba(26, 75, 140, .15);  color: var(--rit-primary); }
+  .mi-qa-tile.tile-amber  { background: linear-gradient(135deg, #fdf6e7, #fbeccb); border-color: #f0d99b; }
+  .mi-qa-tile.tile-amber:hover  { border-color: #d99e06; }
+  .mi-qa-tile.tile-amber .mi-qa-icon  { background: rgba(248, 183, 57, .22); color: #b8860b; }
+  .mi-qa-tile.tile-purple { background: linear-gradient(135deg, #f5effe, #ecdcfd); border-color: #d9c4f6; }
+  .mi-qa-tile.tile-purple:hover  { border-color: #7c3aed; }
+  .mi-qa-tile.tile-purple .mi-qa-icon { background: rgba(124, 58, 237, .13); color: #7c3aed; }
+  .mi-qa-tile.tile-cyan   { background: linear-gradient(135deg, #ecf8fe, #d9f1fc); border-color: #b9e3f7; }
+  .mi-qa-tile.tile-cyan:hover   { border-color: #0ea5e9; }
+  .mi-qa-tile.tile-cyan .mi-qa-icon   { background: rgba(14, 165, 233, .13); color: #0ea5e9; }
+  .mi-qa-tile.tile-indigo { background: linear-gradient(135deg, #eef0fe, #dde1fc); border-color: #c5cbf7; }
+  .mi-qa-tile.tile-indigo:hover  { border-color: #4f46e5; }
+  .mi-qa-tile.tile-indigo .mi-qa-icon { background: rgba(79, 70, 229, .14); color: #4f46e5; }
+
+  /* =============================================================
+     3. KPI CARDS
+     ============================================================= */
+  .mi-kpi-card {
+    position: relative;
+    overflow: hidden;
+    background: #fff;
+    border: 1px solid var(--mi-border);
+    border-radius: 14px;
+    padding: .75rem .95rem;
+    height: 100%;
+    box-shadow: var(--mi-shadow);
+    transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+  }
+
+  .mi-kpi-card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--mi-shadow-lg);
+  }
+
+  .mi-kpi-top { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+
+  .mi-kpi-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .95rem;
+    flex-shrink: 0;
+  }
+
+  .mi-kpi-value { font-size: 1.55rem; font-weight: 800; color: var(--rit-dark); line-height: 1; }
+  .mi-kpi-label { font-size: .76rem; color: var(--mi-muted); font-weight: 600; }
+
+  .mi-trend {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    font-size: .72rem;
+    font-weight: 700;
+  }
+  .mi-trend.up      { color: var(--rit-success); }
+  .mi-trend.down    { color: var(--rit-danger); }
+  .mi-trend.neutral { color: var(--mi-muted); }
+
+  /* =============================================================
+     4. FACULTY ASSIGNED INTERVIEWS
+     ============================================================= */
+  .mi-interview-card {
+    background: #fff;
+    border: 1px solid var(--mi-border);
+    border-radius: 14px;
+    padding: 1.1rem 1.15rem;
+    margin-bottom: 1rem;
+    box-shadow: var(--mi-shadow);
+    transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+  }
+
+  .mi-interview-card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--mi-shadow-lg);
+    border-color: #c2d4ea;
+  }
+
+  .mi-ic-head { min-width: 0; }
+
+  .mi-ic-subject {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .3px;
+    text-transform: uppercase;
+    color: var(--rit-primary);
+    background: rgba(26, 75, 140, .08);
+    padding: .22rem .6rem;
+    border-radius: 999px;
+    margin-bottom: .4rem;
+  }
+
+  .mi-ic-title { font-weight: 700; font-size: 1.02rem; color: var(--rit-dark); margin: 0; line-height: 1.3; }
+
+  .mi-ic-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .35rem 1.2rem;
+    margin: .75rem 0 0;
+    padding: .7rem 0;
+    border-top: 1px solid #eef2f7;
+    border-bottom: 1px solid #eef2f7;
+  }
+
+  .mi-ic-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    font-size: .78rem;
+    color: var(--mi-muted);
+  }
+  .mi-ic-meta-item i { width: 15px; text-align: center; color: var(--rit-primary); opacity: .7; }
+  .mi-ic-meta-item strong { color: var(--mi-ink); font-weight: 600; }
+
+  .mi-ic-footer { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-top: .75rem; flex-wrap: wrap; }
+
+  .mi-ic-note { font-size: .78rem; color: var(--mi-muted); }
+  .mi-ic-note i { margin-right: .35rem; }
+
+  .mi-view-all-row { text-align: center; margin-top: .5rem; }
+
+  .mi-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    font-size: .72rem;
+    font-weight: 700;
+    padding: .35rem .75rem;
+    border-radius: 999px;
+    letter-spacing: .2px;
+    white-space: nowrap;
+  }
+  .mi-badge-completed { background: rgba(22, 163, 74, .12);  color: #15803d; }
+  .mi-badge-progress  { background: rgba(79, 70, 229, .12);  color: #4338ca; }
+  .mi-badge-pending   { background: rgba(245, 158, 11, .16); color: #b45309; }
+  .mi-badge-danger    { background: rgba(220, 38, 38, .12);  color: #b91c1c; }
+  .mi-badge-info      { background: rgba(14, 165, 233, .12); color: #0369a1; }
+  .mi-badge-report    { background: rgba(124, 58, 237, .12); color: #6d28d9; }
+  .mi-badge-neutral   { background: #eef2f7; color: #475569; }
+
+  .mi-empty-state {
+    background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+    border: 1px dashed #cbd5e1;
+    border-radius: 14px;
+    padding: 2.25rem 1.5rem;
+    text-align: center;
+  }
+
+  .mi-empty-icon {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto .9rem;
+    border-radius: 18px;
+    background: #e2e8f0;
+    color: #64748b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+  }
+
+  .mi-empty-state h5 { font-weight: 700; color: var(--rit-dark); margin-bottom: .3rem; font-size: 1.05rem; }
+  .mi-empty-state p { color: var(--mi-muted); font-size: .85rem; margin: 0 auto; max-width: 340px; }
+
+  /* =============================================================
+     5. RESUME WIDGET
+     ============================================================= */
+  .mi-panel {
+    background: #fff;
+    border: 1px solid var(--mi-border);
+    border-radius: 14px;
+    padding: 1.15rem;
+    box-shadow: var(--mi-shadow);
+  }
+
+  .mi-pdf-icon {
+    width: 46px;
+    height: 46px;
+    border-radius: 12px;
+    background: rgba(220, 38, 38, .1);
+    color: #dc2626;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    flex-shrink: 0;
+  }
+
+  .mi-resume-name {
+    font-weight: 700;
+    color: var(--rit-dark);
+    font-size: .9rem;
+    margin: 0 0 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mi-resume-meta { font-size: .76rem; color: var(--mi-muted); }
+
+  .mi-upload-box {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    border: 1px dashed var(--mi-border);
+    border-radius: 8px;
+    padding: .3rem .55rem;
+  }
+  .mi-upload-box input[type="file"] { width: 150px; font-size: .78rem; border: 0; padding: 0; }
+
+  /* =============================================================
+     6. RECENT ATTEMPTS
+     ============================================================= */
+  .mi-table-wrap {
+    max-height: 360px;
+    overflow-y: auto;
+    border: 1px solid var(--mi-border);
+    border-radius: 12px;
+  }
+
+  .mi-table { width: 100%; font-size: .85rem; }
+
+  .mi-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #f8fafc;
+    color: #475569;
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    border-bottom: 1px solid var(--mi-border);
+    padding: .7rem .85rem;
+    white-space: nowrap;
+  }
+
+  .mi-table tbody td { padding: .7rem .85rem; border-bottom: 1px solid #eef2f7; vertical-align: middle; }
+  .mi-table tbody tr:last-child td { border-bottom: 0; }
+  .mi-table tbody tr { transition: background .2s ease; }
+  .mi-table tbody tr:hover { background: #f8fafc; }
+
+  .mi-attempt-title { font-weight: 600; color: var(--rit-dark); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+  .mi-attempt-subject { font-size: .72rem; color: var(--mi-muted); }
+
+  .mi-score {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    height: 24px;
+    padding: 0 .5rem;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: .78rem;
+  }
+
+  /* =============================================================
+     Responsive
+     ============================================================= */
+  @media (max-width: 991.98px) {
+    .mi-qa-grid { grid-template-columns: repeat(2, 1fr); gap: .85rem; }
+    .mi-hero-stats { gap: 1rem; }
+  }
+
+  @media (max-width: 767.98px) {
+    #quickActions {
+      position: sticky;
+      top: 70px;
+      z-index: 100;
+      background: linear-gradient(135deg, #f7fafc, #edf2f7);
+      padding: .9rem;
+      margin: -1rem -1rem .5rem;
+      border-radius: 0 0 16px 16px;
+      box-shadow: 0 8px 18px rgba(16, 24, 40, .1);
+    }
+  }
+
+  @media (max-width: 575.98px) {
+    #quickActions { top: 65px; margin-left: -1rem; margin-right: -1rem; }
+    .mi-qa-grid { gap: .75rem; }
+    .mi-qa-tile { padding: .9rem .85rem; gap: .7rem; }
+    .mi-qa-icon { width: 46px; height: 46px; font-size: 1.15rem; }
+    .mi-hero { padding: 1.25rem; }
+    .mi-hero-stats { gap: .85rem; }
+    .mi-hero-stat { padding-left: .85rem; }
+    .mi-ring-block { width: 84px; height: 84px; }
+    .mi-ring { width: 84px; height: 84px; }
+  }
+</style>
+
+<div class="mi-dashboard">
+
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
+    {% endfor %}
+  {% endif %}
+
+  <!-- ================================================================ -->
+  <!-- SECTION 1: MODERN HEADER                                          -->
+  <!-- ================================================================ -->
+  <section class="mi-hero" aria-label="Dashboard overview">
+    <div class="row g-4 align-items-center">
+      <div class="col-lg-8">
+        <p class="mi-hero-greeting mb-0">
+          <span id="greetingWord">Good Morning</span>,
+          <strong>{{ request.user.username|default:"Student" }}</strong>
+        </p>
+        <h1 class="mi-hero-title mb-2">Mock Interview Dashboard</h1>
+        <div class="d-flex flex-wrap gap-2">
+          <span class="mi-chip"><i class="fas fa-graduation-cap"></i>{{ request.user.Department.Department|default:"Department" }}</span>
+          {% if request.user.semester %}<span class="mi-chip"><i class="fas fa-layer-group"></i>Sem {{ request.user.semester }}</span>{% endif %}
+          <span class="mi-chip"><i class="fas fa-id-card"></i>Reg No: {{ request.user.Employee_id|default:"—" }}</span>
+          <span class="mi-chip"><i class="fas fa-calendar-alt"></i>{% now "M d, Y" %}</span>
+        </div>
+      </div>
+      <div class="col-lg-4">
+        <div class="mi-hero-stats d-flex align-items-center justify-content-lg-end">
+          <div class="mi-ring-block" role="img" aria-label="Interview completion progress">
+            <svg class="mi-ring" viewBox="0 0 84 84" aria-hidden="true">
+              <circle class="mi-ring-track" cx="42" cy="42" r="36"></circle>
+              <circle class="mi-ring-value" id="miRingValue" cx="42" cy="42" r="36"></circle>
+            </svg>
+            <div class="mi-ring-text">
+              <span class="mi-ring-pct" id="ringPct">0%</span>
+              <span class="mi-ring-label">Progress</span>
+            </div>
+          </div>
+          <div class="mi-hero-stat">
+            <span class="mi-hero-stat-label">Average Score</span>
+            <span class="mi-hero-stat-value" id="headerAvgScore">--</span>
+          </div>
+          <div class="mi-hero-stat">
+            <span class="mi-hero-stat-label">Last Interview</span>
+            <span class="mi-hero-stat-value" id="lastInterviewDate">--</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <!-- SECTION 2: QUICK ACTIONS (highest priority)                       -->
+  <!-- ================================================================ -->
+  <section class="mi-section" id="quickActions" aria-label="Quick actions">
+    <div class="mi-section-header">
+      <h2 class="mi-section-title"><span class="mi-section-icon mi-icon-amber"><i class="fas fa-bolt"></i></span>Quick Actions</h2>
+    </div>
+    <div class="mi-qa-grid">
+      <a href="{% url 'mock_interview:setup' %}" class="mi-qa-tile tile-blue">
+        <span class="mi-qa-icon"><i class="fas fa-play-circle"></i></span>
+        <span class="mi-qa-body">
+          <span class="mi-qa-title d-block">Start General Mock Interview</span>
+          <span class="mi-qa-desc d-block">Practice with an AI interviewer</span>
+        </span>
+        <i class="fas fa-chevron-right mi-qa-arrow"></i>
+      </a>
+      <a href="{% url 'mock_interview:student_interview_dashboard' %}" class="mi-qa-tile tile-amber">
+        <span class="mi-qa-icon"><i class="fas fa-chalkboard-teacher"></i></span>
+        <span class="mi-qa-body">
+          <span class="mi-qa-title d-block">Faculty Assigned Interviews</span>
+          <span class="mi-qa-desc d-block">View your assignments</span>
+        </span>
+        <i class="fas fa-chevron-right mi-qa-arrow"></i>
+      </a>
+      <a href="#recentAttempts" class="mi-qa-tile tile-purple">
+        <span class="mi-qa-icon"><i class="fas fa-file-alt"></i></span>
+        <span class="mi-qa-body">
+          <span class="mi-qa-title d-block">My Reports</span>
+          <span class="mi-qa-desc d-block">Scores &amp; feedback</span>
+        </span>
+        <i class="fas fa-chevron-right mi-qa-arrow"></i>
+      </a>
+      <a href="#recentAttempts" class="mi-qa-tile tile-cyan">
+        <span class="mi-qa-icon"><i class="fas fa-history"></i></span>
+        <span class="mi-qa-body">
+          <span class="mi-qa-title d-block">Interview History</span>
+          <span class="mi-qa-desc d-block">Browse past sessions</span>
+        </span>
+        <i class="fas fa-chevron-right mi-qa-arrow"></i>
+      </a>
+      <a href="{% url 'mock_interview:ats_checker' %}" class="mi-qa-tile tile-indigo">
+        <span class="mi-qa-icon"><i class="fas fa-file-check"></i></span>
+        <span class="mi-qa-body">
+          <span class="mi-qa-title d-block">Check Resume ATS</span>
+          <span class="mi-qa-desc d-block">Score &amp; download an ATS-friendly resume</span>
+        </span>
+        <i class="fas fa-chevron-right mi-qa-arrow"></i>
+      </a>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <!-- SECTION 3: KPI CARDS                                              -->
+  <!-- ================================================================ -->
+  <section class="mi-section" aria-label="Performance summary">
+    <div class="row g-3">
+      <div class="col-6 col-lg-3">
+        <div class="mi-kpi-card">
+          <div class="mi-kpi-top">
+            <span class="mi-kpi-icon mi-icon-blue"><i class="fas fa-video"></i></span>
+            <span class="mi-trend neutral" id="trendTotal">--</span>
+          </div>
+          <div class="mi-kpi-value" id="kpiTotal">{{ sessions|length }}</div>
+          <div class="mi-kpi-label">Total Interviews</div>
+        </div>
+      </div>
+      <div class="col-6 col-lg-3">
+        <div class="mi-kpi-card">
+          <div class="mi-kpi-top">
+            <span class="mi-kpi-icon mi-icon-green"><i class="fas fa-check-circle"></i></span>
+            <span class="mi-trend neutral" id="trendCompleted">--</span>
+          </div>
+          <div class="mi-kpi-value" id="kpiCompleted">--</div>
+          <div class="mi-kpi-label">Completed</div>
+        </div>
+      </div>
+      <div class="col-6 col-lg-3">
+        <div class="mi-kpi-card">
+          <div class="mi-kpi-top">
+            <span class="mi-kpi-icon mi-icon-indigo"><i class="fas fa-spinner"></i></span>
+            <span class="mi-trend neutral" id="trendInProgress">--</span>
+          </div>
+          <div class="mi-kpi-value" id="kpiInProgress">--</div>
+          <div class="mi-kpi-label">In Progress</div>
+        </div>
+      </div>
+      <div class="col-6 col-lg-3">
+        <div class="mi-kpi-card">
+          <div class="mi-kpi-top">
+            <span class="mi-kpi-icon mi-icon-amber"><i class="fas fa-star"></i></span>
+            <span class="mi-trend neutral" id="trendAvg">--</span>
+          </div>
+          <div class="mi-kpi-value" id="kpiAvg">--</div>
+          <div class="mi-kpi-label">Average Score</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <!-- SECTION 4: FACULTY ASSIGNED INTERVIEWS (focal)                    -->
+  <!-- ================================================================ -->
+  <section class="mi-section" id="facultyAssigned" aria-label="Faculty assigned interviews">
+    <div class="row g-3 align-items-start">
+      <div class="col-lg-8">
+        <div class="mi-section-header">
+          <h2 class="mi-section-title"><span class="mi-section-icon mi-icon-blue"><i class="fas fa-clipboard-list"></i></span>Faculty Assigned Interviews</h2>
+          {% if assigned_interviews %}
+          <a href="{% url 'mock_interview:student_interview_dashboard' %}" class="btn btn-sm btn-outline-primary">
+            <i class="fas fa-arrow-up-right-from-square me-1"></i>View All
+          </a>
+          {% endif %}
+        </div>
+
+        {% if assigned_interviews %}
+          {% for item in assigned_interviews %}
+            {% with a=item.assignment i=item.interview %}
+            <div class="mi-interview-card {% if forloop.counter > 3 %}mi-fcard-extra d-none{% endif %}">
+              <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                <div class="mi-ic-head">
+                  <span class="mi-ic-subject"><i class="fas fa-book"></i>{{ i.subject_code }}{% if i.chapter %} &mdash; {{ i.chapter }}{% endif %}</span>
+                  <h3 class="mi-ic-title">{{ i.title }}</h3>
+                </div>
+                <div class="flex-shrink-0">
+                  {% if a.status == 'completed' or a.session.status == 'completed' or a.session.status == 'evaluating' or a.session.status == 'report_ready' %}
+                    <span class="mi-status-badge mi-badge-completed"><i class="fas fa-check-circle"></i>Completed</span>
+                  {% elif a.status == 'in_progress' and a.session.status == 'in_progress' %}
+                    <span class="mi-status-badge mi-badge-progress"><i class="fas fa-play-circle"></i>In Progress</span>
+                  {% elif item.time_status == 'expired' %}
+                    <span class="mi-status-badge mi-badge-danger"><i class="fas fa-lock"></i>Expired</span>
+                  {% elif item.time_status == 'upcoming' %}
+                    <span class="mi-status-badge mi-badge-pending"><i class="fas fa-hourglass-start"></i>Upcoming</span>
+                  {% elif item.time_status == 'active' %}
+                    <span class="mi-status-badge mi-badge-info"><i class="fas fa-circle"></i>Open Now</span>
+                  {% else %}
+                    <span class="mi-status-badge mi-badge-pending"><i class="fas fa-clipboard-check"></i>Assigned</span>
+                  {% endif %}
+                </div>
+              </div>
+
+              <div class="mi-ic-meta">
+                <span class="mi-ic-meta-item"><i class="fas fa-user-tie"></i><strong>{{ i.created_by_name|default:"Faculty" }}</strong></span>
+                <span class="mi-ic-meta-item"><i class="fas fa-layer-group"></i>{{ i.get_difficulty_display }}</span>
+                <span class="mi-ic-meta-item"><i class="fas fa-list-ol"></i>{{ i.question_count }} questions</span>
+                <span class="mi-ic-meta-item"><i class="fas fa-clock"></i>{{ i.duration_minutes }} min</span>
+                <span class="mi-ic-meta-item">
+                  <i class="fas fa-calendar-check"></i>
+                  {% if i.start_time %}
+                    {{ i.start_time|date:"M d, Y H:i" }}{% if i.end_time %} &ndash; {{ i.end_time|date:"M d, Y H:i" }}{% endif %}
+                  {% else %}
+                    No fixed schedule
+                  {% endif %}
+                </span>
+              </div>
+
+              <div class="mi-ic-footer">
+                {% if a.status == 'completed' or a.session.status == 'completed' or a.session.status == 'evaluating' or a.session.status == 'report_ready' %}
+                  {% if a.session.status == 'report_ready' %}
+                    <a href="{% url 'mock_interview:report' a.session.public_id %}" class="btn btn-outline-success">
+                      <i class="fas fa-file-alt"></i>View Report
+                    </a>
+                  {% elif a.session.status == 'evaluating' %}
+                    <span class="mi-ic-note"><i class="fas fa-spinner fa-spin"></i>Generating Report...</span>
+                  {% else %}
+                    <span class="mi-ic-note"><i class="fas fa-check-circle"></i>Completed</span>
+                  {% endif %}
+                {% elif a.status == 'in_progress' and a.session %}
+                  <a href="{% url 'mock_interview:room' a.session.public_id %}" class="btn btn-primary">
+                    <i class="fas fa-arrow-right"></i>Continue
+                  </a>
+                {% elif item.can_start %}
+                  <a href="{% url 'mock_interview:start_assigned_interview' interview_id=i.public_id %}" class="btn btn-success">
+                    <i class="fas fa-play"></i>Start Interview
+                  </a>
+                {% elif item.time_status == 'upcoming' %}
+                  <span class="mi-ic-note"><i class="fas fa-hourglass-start"></i>Opens {{ i.start_time|date:"M d, H:i" }}</span>
+                  {% if item.status_info.opens_in_minutes %}
+                  <span class="mi-status-badge mi-badge-info">Opens in {{ item.status_info.opens_in_minutes }} min</span>
+                  {% endif %}
+                {% elif item.time_status == 'expired' %}
+                  <span class="mi-ic-note"><i class="fas fa-lock"></i>Interview Closed</span>
+                {% else %}
+                  <span class="mi-ic-note"><i class="fas fa-lock"></i>{{ item.message }}</span>
+                {% endif %}
+              </div>
+            </div>
+            {% endwith %}
+          {% endfor %}
+
+          {% if assigned_interviews|length > 3 %}
+          <div class="mi-view-all-row">
+            <button type="button" class="btn btn-outline-primary" id="miFacultyToggle" data-show="0">
+              <i class="fas fa-chevron-down me-1"></i>View All
+            </button>
+          </div>
+          {% endif %}
+        {% else %}
+          <div class="mi-empty-state">
+            <div class="mi-empty-icon"><i class="fas fa-clipboard-list"></i></div>
+            <h5>No Faculty Assigned Interviews</h5>
+            <p>Your faculty hasn't assigned any interviews yet. Check back later.</p>
+          </div>
+        {% endif %}
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- SECTION 5: RESUME (compact document widget)                   -->
+      <!-- ============================================================ -->
+      <div class="col-lg-4" id="resumeWidget">
+        <div class="mi-section-header">
+          <h2 class="mi-section-title"><span class="mi-section-icon mi-icon-purple"><i class="fas fa-file-pdf"></i></span>Resume</h2>
+        </div>
+
+        <div class="mi-panel">
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <span class="mi-pdf-icon"><i class="fas fa-file-pdf"></i></span>
+            <div class="flex-grow-1 mi-min-0">
+              {% if resumes %}
+                {% with r=resumes.0 %}
+                <p class="mi-resume-name">{{ r.original_filename }}</p>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                  <span class="mi-resume-meta"><i class="far fa-calendar-alt me-1"></i>{{ r.created_at|date:"M d, Y" }}</span>
+                  {% if r.status == 'parsed' %}
+                    <span class="mi-status-badge mi-badge-completed"><i class="fas fa-check-circle"></i>Parsed</span>
+                  {% else %}
+                    <span class="mi-status-badge mi-badge-pending">{{ r.get_status_display }}</span>
+                  {% endif %}
+                </div>
+                {% endwith %}
+              {% else %}
+                <p class="mi-resume-name">No resume uploaded yet</p>
+                <p class="mi-resume-meta mb-0">Upload a PDF or DOCX to personalise your interviews.</p>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="d-flex gap-2 flex-wrap mt-3 pt-3 border-top" style="border-color: var(--rit-border) !important;">
+            {% if resumes %}
+              {% with r=resumes.0 %}
+              <a href="{% url 'mock_interview:setup' %}?resume={{ r.public_id }}" class="btn btn-primary">
+                <i class="fas fa-play"></i>Use Resume
+              </a>
+              <form method="post" enctype="multipart/form-data" action="{% url 'mock_interview:upload_resume' %}" id="replaceResumeForm" class="m-0 d-flex">
+                {% csrf_token %}
+                <input type="file" name="resume" id="replaceResumeInput" accept=".pdf,.docx" required class="d-none">
+                <button type="submit" id="replaceResumeBtn" class="btn btn-outline-secondary">
+                  <i class="fas fa-sync"></i>Replace Resume
+                </button>
+              </form>
+              {% endwith %}
+            {% else %}
+              <form method="post" enctype="multipart/form-data" action="{% url 'mock_interview:upload_resume' %}" class="d-flex align-items-center gap-2 flex-wrap">
+                {% csrf_token %}
+                <div class="mi-upload-box">
+                  <i class="fas fa-cloud-upload-alt" style="color: var(--rit-primary); font-size: 14px;"></i>
+                  <input type="file" name="resume" accept=".pdf,.docx" required class="form-control form-control-sm" onchange="this.form.submit()">
+                </div>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-upload"></i>Upload</button>
+                <a href="{% url 'mock_interview:setup' %}" class="btn btn-outline-secondary">Skip</a>
+              </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <!-- SECTION 6: RECENT ATTEMPTS (compact, scrollable)                  -->
+  <!-- ================================================================ -->
+  <section class="mi-section" id="recentAttempts" aria-label="Recent interview attempts">
+    <div class="mi-section-header">
+      <h2 class="mi-section-title"><span class="mi-section-icon mi-icon-cyan"><i class="fas fa-clock-rotate-left"></i></span>Recent Attempts</h2>
+      {% if sessions %}
+      <button type="button" class="btn btn-sm btn-outline-primary" id="miAttemptsToggle" data-show="0">
+        <i class="fas fa-chevron-down me-1"></i>View All
+      </button>
+      {% endif %}
+    </div>
+
+    {% if sessions %}
+    <div class="mi-table-wrap">
+      <table class="mi-table table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Interview</th>
+            <th>Date</th>
+            <th class="text-center">Score</th>
+            <th>Status</th>
+            <th class="text-end">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for session in sessions %}
+          <tr class="{% if forloop.counter > 5 %}mi-attempt-extra d-none{% endif %}">
+            <td>
+              <div class="mi-attempt-title">{{ session.role }}</div>
+              {% if session.mock_interview %}<div class="mi-attempt-subject"><i class="fas fa-book me-1"></i>{{ session.mock_interview.subject_code }}</div>{% endif %}
+            </td>
+            <td style="white-space: nowrap;">{{ session.created_at|date:"M d, Y" }}</td>
+            <td class="text-center">
+              {% if session.overall_score is not None %}
+              <span class="mi-score {% if session.overall_score >= 70 %}mi-badge-completed{% elif session.overall_score >= 50 %}mi-badge-pending{% else %}mi-badge-danger{% endif %}">
+                {{ session.overall_score|floatformat:0 }}
+              </span>
+              {% else %}
+              <span class="text-muted">&mdash;</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if session.status == 'report_ready' %}
+                <span class="mi-status-badge mi-badge-report"><i class="fas fa-file-alt"></i>Report Ready</span>
+              {% elif session.status == 'completed' or session.status == 'evaluating' %}
+                <span class="mi-status-badge mi-badge-completed"><i class="fas fa-check-circle"></i>Completed</span>
+              {% elif session.status == 'in_progress' %}
+                <span class="mi-status-badge mi-badge-progress"><i class="fas fa-play-circle"></i>In Progress</span>
+              {% elif session.status == 'draft' or session.status == 'planning' or session.status == 'ready' %}
+                <span class="mi-status-badge mi-badge-pending"><i class="fas fa-hourglass-half"></i>Pending</span>
+              {% elif session.status == 'failed' %}
+                <span class="mi-status-badge mi-badge-danger"><i class="fas fa-exclamation-circle"></i>Failed</span>
+              {% else %}
+                <span class="mi-status-badge mi-badge-neutral">{{ session.get_status_display }}</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              {% if session.status == 'report_ready' %}
+                <a href="{% url 'mock_interview:report' session.public_id %}" class="btn btn-sm btn-outline-primary">
+                  <i class="fas fa-file-alt"></i>View Report
+                </a>
+              {% elif session.status == 'in_progress' %}
+                <a href="{% url 'mock_interview:room' session.public_id %}" class="btn btn-sm btn-primary">
+                  <i class="fas fa-arrow-right"></i>Resume
+                </a>
+                <button type="button" class="btn btn-sm btn-outline-danger btn-delete-session"
+                        data-url="{% url 'mock_interview:delete_session' session.public_id %}"
+                        data-title="{{ session.role|escapejs }}">
+                  <i class="fas fa-trash me-1"></i>Delete
+                </button>
+              {% elif session.status == 'completed' or session.status == 'evaluating' %}
+                <a href="{% url 'mock_interview:processing' session.public_id %}" class="btn btn-sm btn-outline-primary">
+                  <i class="fas fa-file-alt"></i>View Report
+                </a>
+              {% elif session.status == 'draft' or session.status == 'planning' or session.status == 'ready' %}
+                <button type="button" class="btn btn-sm btn-outline-danger btn-delete-session"
+                        data-url="{% url 'mock_interview:delete_session' session.public_id %}"
+                        data-title="{{ session.role|escapejs }}">
+                  <i class="fas fa-trash me-1"></i>Delete
+                </button>
+              {% else %}
+                <a href="{% url 'mock_interview:setup' %}" class="btn btn-sm btn-outline-secondary">
+                  <i class="fas fa-sync"></i>Retry
+                </a>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="mi-empty-state">
+      <div class="mi-empty-icon"><i class="fas fa-history"></i></div>
+      <h5>No Attempts Yet</h5>
+      <p>No interview attempts so far. Start your first practice session to see results here.</p>
+    </div>
+    {% endif %}
+  </section>
+
+</div>
+
+<script>
+(function () {
+  var hour = new Date().getHours();
+  var greetEl = document.getElementById('greetingWord');
+  if (greetEl) {
+    greetEl.textContent = hour < 12 ? 'Good Morning' : (hour < 17 ? 'Good Afternoon' : 'Good Evening');
+  }
+
+  // ── Session data for statistics ─────────────────────────────────────
+  var sessions = [
+    {% for s in sessions %}
+    {
+      status: "{{ s.status|escapejs }}",
+      score: {% if s.overall_score is not None %}{{ s.overall_score }}{% else %}null{% endif %},
+      created: {% if s.created_at %}{{ s.created_at|date:"U" }}{% else %}null{% endif %}
+    }{% if not forloop.last %},{% endif %}
+    {% endfor %}
+  ];
+
+  var total = sessions.length;
+  var completed = 0, inProgress = 0, weekCount = 0, scoreSum = 0, scoreCount = 0;
+  var lastScore = null, lastDate = null;
+  var weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+  sessions.forEach(function (s) {
+    if (s.status === 'completed' || s.status === 'evaluating' || s.status === 'report_ready') completed++;
+    if (s.status === 'in_progress') inProgress++;
+    if (s.created) {
+      var t = s.created * 1000;
+      if (t >= weekAgo) weekCount++;
+      if (lastDate === null) lastDate = t;
+    }
+    if (s.score !== null) {
+      scoreSum += parseFloat(s.score);
+      scoreCount++;
+      lastScore = parseFloat(s.score);
+    }
+  });
+
+  var avg = scoreCount ? Math.round(scoreSum / scoreCount) : null;
+  var avgPct = avg !== null ? avg + '%' : '--';
+
+  function setText(id, val) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = val;
+  }
+
+  // Progress ring
+  var pct = total ? Math.round((completed / total) * 100) : 0;
+  var ring = document.getElementById('miRingValue');
+  if (ring) {
+    var circ = 2 * Math.PI * 36;
+    ring.style.strokeDasharray = circ;
+    ring.style.strokeDashoffset = circ * (1 - pct / 100);
+  }
+  setText('ringPct', pct + '%');
+
+  // Header stats
+  setText('headerAvgScore', avgPct);
+  if (lastDate !== null) {
+    setText('lastInterviewDate', new Date(lastDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }));
+  }
+
+  // KPI cards
+  setText('kpiTotal', total);
+  setText('kpiCompleted', completed);
+  setText('kpiInProgress', inProgress);
+  setText('kpiAvg', avgPct);
+
+  // KPI trend indicators
+  var tTotal = document.getElementById('trendTotal');
+  if (tTotal) tTotal.textContent = weekCount ? '+' + weekCount + ' this week' : (total ? 'All time' : 'No sessions');
+  setText('trendCompleted', total ? completed + '/' + total + ' sessions' : 'No sessions yet');
+  setText('trendInProgress', inProgress ? inProgress + ' active now' : 'Nothing in progress');
+
+  var tAvg = document.getElementById('trendAvg');
+  if (tAvg) {
+    if (avg !== null && lastScore !== null) {
+      var delta = Math.round(lastScore - avg);
+      var up = delta >= 0;
+      tAvg.innerHTML = '<i class="fas fa-arrow-' + (up ? 'up' : 'down') + '"></i> ' + Math.abs(delta) + ' vs last';
+      tAvg.className = 'mi-trend ' + (up ? 'up' : 'down');
+    } else {
+      tAvg.textContent = 'No scores yet';
+      tAvg.className = 'mi-trend neutral';
+    }
+  }
+
+  // ── Faculty assigned interviews: View All toggle ────────────────────
+  var faToggle = document.getElementById('miFacultyToggle');
+  if (faToggle) {
+    faToggle.addEventListener('click', function () {
+      var hidden = document.querySelectorAll('.mi-fcard-extra');
+      var show = faToggle.getAttribute('data-show') !== '1';
+      hidden.forEach(function (c) { c.classList.toggle('d-none', !show); });
+      faToggle.setAttribute('data-show', show ? '1' : '0');
+      faToggle.innerHTML = show
+        ? '<i class="fas fa-chevron-up me-1"></i>Show Less'
+        : '<i class="fas fa-chevron-down me-1"></i>View All';
+    });
+  }
+
+  // ── Recent attempts: View All toggle ────────────────────────────────
+  var raToggle = document.getElementById('miAttemptsToggle');
+  if (raToggle) {
+    raToggle.addEventListener('click', function () {
+      var hidden = document.querySelectorAll('.mi-attempt-extra');
+      var show = raToggle.getAttribute('data-show') !== '1';
+      hidden.forEach(function (r) { r.classList.toggle('d-none', !show); });
+      raToggle.setAttribute('data-show', show ? '1' : '0');
+      raToggle.innerHTML = show
+        ? '<i class="fas fa-chevron-up me-1"></i>Show Less'
+        : '<i class="fas fa-chevron-down me-1"></i>View All';
+    });
+  }
+
+  // ── Resume card: Replace Resume ─────────────────────────────────────
+  function miShowResumeError(message) {
+    var widget = document.getElementById('resumeWidget');
+    var alertEl = document.createElement('div');
+    alertEl.className = 'alert alert-danger alert-dismissible fade show';
+    alertEl.setAttribute('role', 'alert');
+    alertEl.innerHTML = '<div class="d-flex align-items-center"><i class="fas fa-exclamation-circle me-3"></i><span class="flex-grow-1"></span><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button></div>';
+    alertEl.querySelector('.flex-grow-1').textContent = message;
+    if (widget) widget.insertBefore(alertEl, widget.firstChild);
+    else alert(message);
+  }
+
+  var replaceBtn = document.getElementById('replaceResumeBtn');
+  var replaceInput = document.getElementById('replaceResumeInput');
+  if (replaceBtn && replaceInput) {
+    replaceBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      replaceInput.click();
+    });
+    replaceInput.addEventListener('change', function () {
+      if (!replaceInput.files || !replaceInput.files.length) return;
+      var form = replaceInput.form;
+      var tokenInput = form.querySelector('input[name="csrfmiddlewaretoken"]');
+      var original = replaceBtn.innerHTML;
+      replaceBtn.disabled = true;
+      replaceBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Uploading...';
+      var fd = new FormData(form);
+      replaceInput.value = '';
+      fetch(form.action, {
+        method: 'POST',
+        body: fd,
+        headers: tokenInput ? { 'X-CSRFToken': tokenInput.value } : {},
+        credentials: 'same-origin'
+      }).then(function (res) {
+        if (!res.ok) throw new Error('Upload failed');
+        return res.text().then(function (html) { return { html: html, url: res.url }; });
+      }).then(function (out) {
+        // upload_resume redirects to the setup page on success and back to
+        // the dashboard when the selected file is rejected. If it was
+        // rejected, the previous resume record is untouched.
+        if (out.url.indexOf('/setup/') !== -1) {
+          window.location.reload();
+          return;
+        }
+        var doc = new DOMParser().parseFromString(out.html, 'text/html');
+        var msg = doc.querySelector('.alert-custom .flex-grow-1');
+        replaceBtn.disabled = false;
+        replaceBtn.innerHTML = original;
+        miShowResumeError((msg && msg.textContent.trim()) || 'Please choose a valid PDF or DOCX resume.');
+      }).catch(function () {
+        replaceBtn.disabled = false;
+        replaceBtn.innerHTML = original;
+        miShowResumeError('Upload failed. Your existing resume was kept unchanged.');
+      });
+    });
+  }
+
+  // ── Recent attempts: Delete session (pending / in progress only) ────
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('.btn-delete-session');
+    if (!btn) return;
+    var title = btn.getAttribute('data-title') || '';
+    if (!confirm('Delete this interview attempt' + (title ? ' "' + title + '"' : '') + '? This action cannot be undone.')) return;
+    var original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+    fetch(btn.getAttribute('data-url'), {
+      method: 'POST',
+      headers: {'X-CSRFToken': '{{ csrf_token }}'}
+    }).then(function (r) {
+      return r.json().catch(function () { return null; });
+    }).then(function (data) {
+      if (data && data.status === 'deleted') {
+        location.reload();
+        return;
+      }
+      alert((data && data.error) || 'Unable to delete this interview.');
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }).catch(function () {
+      alert('Unable to delete this interview. Please try again later.');
+      btn.disabled = false;
+      btn.innerHTML = original;
+    });
+  });
+})();
+</script>
+
+{% endblock %}

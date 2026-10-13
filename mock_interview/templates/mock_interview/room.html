@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+<link rel="stylesheet" href="{% static 'mock_interview/css/interview-room.css' %}">
+<script>document.documentElement.classList.add("mi-interview-shell");</script>
+
+<!-- ============================================================
+     Dedicated Interview Room — hides ERP chrome, fills viewport.
+     Only interview components live here (role, progress, timer,
+     AI interviewer, recording, transcript review, controls).
+     ============================================================ -->
+<div class="mi-interview">
+    <header class="mi-interview-topbar">
+        <div class="mi-topbar-left">
+            <span class="mi-topbar-brand"><i class="fas fa-robot"></i><span>Mock Interview</span></span>
+            <span class="mi-topbar-chip mi-topbar-role">{{ session.role }}</span>
+            <span class="mi-topbar-chip mi-topbar-round">{{ session.interview_round }}</span>
+            {% if session.mock_interview %}
+                <span class="mi-topbar-chip mi-topbar-doc"><i class="fas fa-file-alt"></i> Document-based</span>
+            {% endif %}
+        </div>
+        <div class="mi-topbar-mid">
+            <span class="mi-topbar-progress"><i class="fas fa-list-ol"></i>Question {{ question.sequence_number }} / {{ session.question_count }}</span>
+        </div>
+        <div class="mi-topbar-right">
+            <span class="mi-timer"><i class="fas fa-stopwatch"></i><span id="timer">{{ session.duration_minutes }}:00</span></span>
+            <button id="miFullscreenBtn" type="button" aria-label="Enter full screen" title="Enter full screen">
+                <i class="fas fa-expand"></i>
+            </button>
+        </div>
+    </header>
+
+    <div id="notice" class="alert alert-info">Listen to the question, then record your answer.</div>
+
+    <main class="mi-interview-main">
+        <section class="mi-panel mi-panel-question">
+            <div class="mi-panel-head"><i class="fas fa-user-tie"></i>AI Interviewer</div>
+            <div class="mi-panel-body">
+                <p class="mi-question fs-5">{{ question.question_text }}</p>
+                {% if question.audio_file %}
+                    <div class="mi-audio-wrap">
+                        <audio id="questionAudio" controls autoplay src="{% url 'mock_interview:question_audio' question.public_id %}"></audio>
+                        <button id="repeatButton" class="btn btn-outline-secondary" type="button">Repeat question</button>
+                    </div>
+                {% else %}
+                    <div class="alert alert-warning">Local TTS is unavailable. Read the stored question text above.</div>
+                {% endif %}
+            </div>
+        </section>
+
+        <section class="mi-panel mi-panel-answer">
+            <div class="mi-panel-head"><i class="fas fa-video"></i>Your answer</div>
+            <div class="mi-panel-body">
+                <video id="studentVideo" autoplay muted playsinline class="mi-video mb-3" style="aspect-ratio:16/9;object-fit:cover"></video>
+                <div class="d-flex gap-2 mb-3">
+                    <button id="recordButton" class="btn btn-primary" type="button">{% if draft_answer %}Re-record answer{% else %}Start answer{% endif %}</button>
+                    <button id="stopButton" class="btn btn-danger" type="button" disabled>Stop and transcribe</button>
+                </div>
+                <label class="form-label fw-bold" for="transcript">Automatic transcript — review and correct every error</label>
+                <textarea id="transcript" class="form-control mb-3" rows="6" placeholder="Your local Faster-Whisper transcript will appear here." {% if not draft_answer %}readonly{% endif %}>{{ draft_answer.corrected_transcript|default:"" }}</textarea>
+                <div id="transcriptWarning" class="alert alert-warning {% if not draft_answer or draft_answer.speech_metrics.transcript_quality.status != 'needs_review' %}d-none{% endif %}">{% if draft_answer %}{% for issue in draft_answer.speech_metrics.transcript_quality.issues %}{{ issue }} {% endfor %}{% endif %}</div>
+                <div id="transcriptConfirmation" class="form-check mb-3 {% if not draft_answer %}d-none{% endif %}">
+                    <input id="confirmTranscript" class="form-check-input" type="checkbox">
+                    <label class="form-check-label" for="confirmTranscript">
+                        I confirm that this edited transcript matches what I said.
+                    </label>
+                </div>
+                <button id="submitButton" class="btn btn-success" type="button" disabled>{% if is_final_question %}Submit final answer and finish interview{% else %}Submit answer{% endif %}</button>
+            </div>
+        </section>
+    </main>
+
+    <footer class="mi-interview-footer">
+        <button id="skipButton" class="btn btn-outline-warning" type="button"><i class="fas fa-forward me-1"></i>Skip question</button>
+        <button id="endButton" class="btn btn-outline-danger" type="button"><i class="fas fa-stop-circle me-1"></i>End interview</button>
+    </footer>
+</div>
+
+<script src="{% static 'mock_interview/js/interview-room.js' %}"></script>
+
+<script>
+window.MOCK_INTERVIEW_FOCUS_GUARD = {
+    endpoint: "{% url 'mock_interview:focus_violation' session.public_id %}",
+    csrf: "{{ csrf_token }}",
+    startingViolations: {{ focus_guard_count }},
+    maxViolations: 3,
+    enforceFullscreen: true,
+    fullscreenTriggerSelector: "#recordButton",
+    onLockout: function () {
+        ["recordButton", "stopButton", "submitButton", "skipButton", "endButton"].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) { el.disabled = true; el.classList.add("disabled"); }
+        });
+    }
+};
+</script>
+<script src="{% static 'mock_interview/js/focus-guard.js' %}"></script>
+<script>
+(function () {
+    if ({{ focus_guard_locked|yesno:"true,false" }}) {
+        var guard = window.MockInterviewFocusGuard;
+        if (guard && !guard.isLocked()) guard.lockout();
+    }
+})();
+</script>
+<script>
+(() => {
+    const csrf = "{{ csrf_token }}";
+    const guard = window.MockInterviewFocusGuard;
+    const transcribeUrl = "{% url 'mock_interview:transcribe_answer' question.public_id %}";
+    const skipUrl = "{% url 'mock_interview:skip_question' question.public_id %}";
+    const endUrl = "{% url 'mock_interview:end_interview' session.public_id %}";
+    const notice = document.getElementById("notice");
+    const recordButton = document.getElementById("recordButton");
+    const stopButton = document.getElementById("stopButton");
+    const submitButton = document.getElementById("submitButton");
+    const transcript = document.getElementById("transcript");
+    const transcriptWarning = document.getElementById("transcriptWarning");
+    const transcriptConfirmation = document.getElementById("transcriptConfirmation");
+    const confirmTranscript = document.getElementById("confirmTranscript");
+    const isFinalQuestion = "{{ is_final_question|yesno:'true,false' }}" === "true";
+    let stream, recorder, chunks = [];
+    let submitUrl = "{% if draft_answer %}{% url 'mock_interview:submit_answer' draft_answer.public_id %}{% endif %}" || null;
+    let submitting = false;
+
+    function show(message, type="info") {
+        notice.className = `alert alert-${type}`;
+        notice.textContent = message;
+    }
+    function cleanup() { if (stream) stream.getTracks().forEach(track => track.stop()); }
+    navigator.mediaDevices.getUserMedia({
+        audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1
+        },
+        video: true
+    }).then(media => {
+        stream = media; document.getElementById("studentVideo").srcObject = media;
+    }).catch(() => show("Microphone access is required to record an answer.", "danger"));
+
+    const audio = document.getElementById("questionAudio");
+    if (audio) {
+        const enableRecording = () => {
+            if (submitting) return;
+            recordButton.disabled = false;
+            show("The question has finished. You can record your answer.");
+        };
+        const disableRecording = () => {
+            if (submitting) return;
+            recordButton.disabled = true;
+            show("Listen to the complete question before recording.");
+        };
+        audio.addEventListener("play", disableRecording);
+        audio.addEventListener("pause", enableRecording);
+        audio.addEventListener("ended", enableRecording, {once: true});
+        audio.addEventListener("error", enableRecording, {once: true});
+        recordButton.disabled = !audio.paused;
+    }
+    document.getElementById("repeatButton").addEventListener("click", () => {
+        if (audio) {
+            recordButton.disabled = true;
+            audio.currentTime = 0;
+            audio.play();
+            audio.addEventListener("ended", enableRecording, {once: true});
+            audio.addEventListener("error", enableRecording, {once: true});
+        }
+    });
+    recordButton.addEventListener("click", () => {
+        if (!stream) return show("Microphone is not ready.", "danger");
+        chunks = [];
+        transcript.value = "";
+        transcript.readOnly = true;
+        transcriptWarning.classList.add("d-none");
+        transcriptConfirmation.classList.add("d-none");
+        confirmTranscript.checked = false;
+        submitButton.disabled = true;
+        const audioOnlyStream = new MediaStream(stream.getAudioTracks());
+        const preferredTypes = [
+            "audio/webm;codecs=opus",
+            "audio/webm",
+            "audio/mp4"
+        ];
+        const mimeType = preferredTypes.find(type => MediaRecorder.isTypeSupported(type));
+        recorder = new MediaRecorder(
+            audioOnlyStream,
+            mimeType ? {mimeType, audioBitsPerSecond: 128000} : undefined
+        );
+        recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+        recorder.onstop = async () => {
+            show("Uploading and transcribing locally. Please wait...");
+            const blob = new Blob(chunks, {type: recorder.mimeType || "audio/webm"});
+            const data = new FormData();
+            data.append("audio", blob, "answer.webm");
+            try {
+                const response = await fetch(transcribeUrl, {method:"POST", headers:{"X-CSRFToken":csrf}, body:data});
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || "Transcription failed.");
+                transcript.value = result.transcript;
+                transcript.readOnly = false;
+                submitUrl = result.submit_url;
+                confirmTranscript.checked = false;
+                transcriptConfirmation.classList.remove("d-none");
+                submitButton.disabled = true;
+                recordButton.disabled = false;
+                recordButton.textContent = "Re-record answer";
+                if (result.quality && result.quality.status === "needs_review") {
+                    transcriptWarning.classList.remove("d-none");
+                    transcriptWarning.textContent =
+                        `Transcription quality is unreliable: ${result.quality.issues.join(" ")} ` +
+                        "Please re-record in a quieter position or manually correct the transcript.";
+                    show("The automatic transcript needs careful review.", "warning");
+                } else {
+                    transcriptWarning.classList.add("d-none");
+                    show("Review every word and confirm the transcript before submission.", "success");
+                }
+            } catch (error) { show(error.message, "danger"); recordButton.disabled = false; }
+        };
+        recorder.start(1000);
+        recordButton.disabled = true; stopButton.disabled = false;
+        show("Recording your answer...", "danger");
+    });
+    transcript.addEventListener("input", () => {
+        confirmTranscript.checked = false;
+        submitButton.disabled = true;
+    });
+    confirmTranscript.addEventListener("change", () => {
+        submitButton.disabled = !confirmTranscript.checked || !transcript.value.trim();
+    });
+    stopButton.addEventListener("click", () => {
+        if (recorder && recorder.state !== "inactive") recorder.stop();
+        stopButton.disabled = true;
+    });
+
+    async function submitAnswer() {
+        if (submitting || !submitUrl) return;
+        submitting = true;
+        submitButton.disabled = true;
+        show("Submitting your answer...");
+        try {
+            const response = await fetch(submitUrl, {
+                method:"POST", headers:{"X-CSRFToken":csrf, "Content-Type":"application/json"},
+                body:JSON.stringify({
+                    transcript: transcript.value,
+                    transcript_confirmed: confirmTranscript.checked
+                })
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                // A 409 means the server has already accepted the answer (e.g. a
+                // retry after a lost response). Reloading lets the room pick up the
+                // next question, or forwards to processing when the interview ended.
+                if (response.status === 409) {
+                    if (guard) guard.suppress();
+                    window.location.reload();
+                    return;
+                }
+                throw new Error(result.error || "Submission failed.");
+            }
+            cleanup();
+            if (guard) guard.suppress();
+            window.location.href = result.next_url;
+        } catch (error) {
+            submitting = false;
+            submitButton.disabled = false;
+            show(error.message, "danger");
+        }
+    }
+
+    submitButton.addEventListener("click", submitAnswer);
+    document.getElementById("skipButton").addEventListener("click", async () => {
+        if (!confirm("Skip this question?")) return;
+        const response = await fetch(skipUrl, {method:"POST", headers:{"X-CSRFToken":csrf}});
+        const result = await response.json();
+        if (response.ok) { if (guard) guard.suppress(); cleanup(); window.location.href = result.next_url; }
+        else show(result.error || "Could not skip.", "danger");
+    });
+    document.getElementById("endButton").addEventListener("click", async () => {
+        if (!confirm("End the interview and generate the report from submitted answers?")) return;
+        const response = await fetch(endUrl, {method:"POST", headers:{"X-CSRFToken":csrf}});
+        const result = await response.json();
+        if (response.ok) { if (guard) guard.suppress(); cleanup(); window.location.href = result.next_url; }
+        else show(result.error || "At least one evaluated answer is required.", "danger");
+    });
+    let remaining = Number("{{ session.duration_minutes|default:0 }}") * 60;
+    setInterval(() => {
+        remaining = Math.max(0, remaining - 1);
+        document.getElementById("timer").textContent =
+            `${String(Math.floor(remaining/60)).padStart(2,"0")}:${String(remaining%60).padStart(2,"0")}`;
+    }, 1000);
+    window.addEventListener("beforeunload", cleanup);
+})();
+</script>
+{% endblock %}

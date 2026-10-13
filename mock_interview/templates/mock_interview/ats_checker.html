@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+<style>
+  .ats-zone {
+    border: 2px dashed var(--rit-border, #c9dbf0);
+    border-radius: 14px;
+    padding: 2.4rem 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .2s ease, background .2s ease;
+  }
+  .ats-zone:hover, .ats-zone.dragover {
+    border-color: var(--rit-primary, #1a4b8c);
+    background: #f8faff;
+  }
+  .ats-zone i { color: var(--rit-primary, #1a4b8c); }
+</style>
+
+<div class="text-center mb-4">
+  <h3 class="fw-bold"><i class="fas fa-file-check me-2"></i>ATS Resume Checker</h3>
+  <p class="text-muted">Check how ATS-friendly your resume is and download a corrected version.</p>
+</div>
+
+{% if messages %}
+  {% for message in messages %}<div class="alert alert-warning">{{ message }}</div>{% endfor %}
+{% endif %}
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+<form class="content-card" method="post" enctype="multipart/form-data" style="max-width: 900px; margin: 0 auto;">
+  {% csrf_token %}
+  <div class="row g-3">
+    <div class="col-12">
+      <label class="form-label fw-semibold" for="resume">Upload your resume (PDF or DOCX)</label>
+      <div class="ats-zone" id="atsZone">
+        <i class="fas fa-cloud-upload-alt fa-3x mb-3"></i>
+        <div class="fw-semibold">Drag &amp; drop or click to choose</div>
+        <div class="text-muted small">Max 5 MB. PDF and DOCX only.</div>
+        <input class="form-control mt-3 d-none" type="file" id="resume" name="resume"
+               accept=".pdf,.docx" required>
+      </div>
+      <div class="form-text" id="atsFileName"></div>
+    </div>
+    <div class="col-12">
+      <label class="form-label fw-semibold" for="job_description">Job description (optional)</label>
+      <textarea class="form-control" id="job_description" name="job_description" rows="5"
+                maxlength="8000" placeholder="Paste the target job description to match keywords. Leave empty for a general ATS review."></textarea>
+      <div class="form-text">When provided, keywords from this description are checked against your resume.</div>
+    </div>
+  </div>
+  <div class="d-flex justify-content-between mt-4">
+    <a class="btn btn-outline-secondary" href="{% url 'mock_interview:dashboard' %}">Back to dashboard</a>
+    <button class="btn btn-primary px-4" type="submit">Analyze my resume</button>
+  </div>
+</form>
+
+{% if existing_checks %}
+<div class="content-card mt-4" style="max-width: 900px; margin: 1.5rem auto 0;">
+  <h5 class="fw-bold mb-3"><i class="fas fa-history me-2"></i>Previous checks</h5>
+  <div class="list-group">
+    {% for check in existing_checks %}
+    <a href="{% url 'mock_interview:ats_report' public_id=check.public_id %}"
+       class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+      <span><i class="fas fa-file-alt me-2"></i>{{ check.source_resume.original_filename }}</span>
+      <span class="text-muted small">
+        {% if check.status == "ready" %}{{ check.score }}/100{% else %}{{ check.status }}{% endif %}
+        &middot; {{ check.created_at|date:"d M Y" }}
+        <i class="fas fa-chevron-right ms-2"></i>
+      </span>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<script>
+  const zone = document.getElementById('atsZone');
+  const input = document.getElementById('resume');
+  const fileName = document.getElementById('atsFileName');
+  zone.addEventListener('click', () => input.click());
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) { input.files = e.dataTransfer.files; }
+  });
+  input.addEventListener('change', () => {
+    fileName.textContent = input.files.length ? input.files[0].name : '';
+  });
+</script>
+{% endblock %}

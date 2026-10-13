@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <h4 class="fw-bold mb-4"><i class="fas fa-upload me-2"></i>Upload Teaching Document</h4>
+
+        <div class="content-card">
+            <form id="uploadForm">
+                {% csrf_token %}
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Subject Code *</label>
+                    <input type="text" class="form-control" id="subjectCode"
+                           placeholder="e.g., CS301" required>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Chapter / Topic</label>
+                    <input type="text" class="form-control" id="chapter"
+                           placeholder="e.g., Operating Systems - Process Management">
+                </div>
+
+                <div class="mb-4">
+                    <label class="form-label fw-bold">Document *</label>
+                    <div class="upload-zone" id="uploadZone"
+                         style="border: 3px dashed var(--rit-primary); border-radius: 12px; padding: 60px 20px; text-align: center; cursor: pointer; transition: all 0.3s; background: #fff;">
+                        <i class="fas fa-cloud-upload-alt fa-3x mb-3" style="color: var(--rit-primary);"></i>
+                        <h5>Drop your document here</h5>
+                        <p class="text-muted">or click to browse</p>
+                        <p class="small text-muted">Supported: PDF, PPTX, DOCX, TXT (Max 50MB)</p>
+                        <input type="file" id="fileInput" class="d-none"
+                               accept=".pdf,.pptx,.docx,.txt">
+                    </div>
+                    <div id="fileInfo" class="mt-2 d-none">
+                        <span class="badge bg-info" id="fileName"></span>
+                        <span class="text-muted ms-2" id="fileSize"></span>
+                    </div>
+                </div>
+
+                <div class="progress-container mb-4" id="progressContainer" style="display: none;">
+                    <div class="progress" style="height: 20px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated"
+                             id="progressBar" style="width: 0%">0%</div>
+                    </div>
+                    <small class="text-muted" id="progressText">Uploading and processing...</small>
+                </div>
+
+                <button type="submit" class="btn btn-primary w-100" id="uploadBtn" disabled>
+                    <i class="fas fa-upload me-1"></i>Upload & Process
+                </button>
+            </form>
+
+            <div id="result" class="mt-4 d-none">
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle me-1"></i>
+                    <strong>Document processed successfully!</strong>
+                    <p class="mb-1" id="resultText"></p>
+                    <a href="{% url 'mock_interview:faculty_dashboard' %}" class="btn btn-sm btn-outline-primary mt-2">
+                        Back to Dashboard
+                    </a>
+                </div>
+            </div>
+
+            <div id="error" class="mt-4 d-none">
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-1"></i>
+                    <span id="errorText"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.upload-zone:hover { border-color: var(--rit-accent) !important; background: #f8f9ff; }
+.upload-zone.dragover { border-color: var(--rit-success) !important; background: #e8f8f0; }
+</style>
+
+<script>
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInput');
+const uploadForm = document.getElementById('uploadForm');
+const uploadBtn = document.getElementById('uploadBtn');
+const progressContainer = document.getElementById('progressContainer');
+const progressBar = document.getElementById('progressBar');
+const progressText = document.getElementById('progressText');
+
+uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadZone.classList.remove('dragover');
+    fileInput.files = e.dataTransfer.files;
+    handleFileSelect();
+});
+fileInput.addEventListener('change', handleFileSelect);
+
+function handleFileSelect() {
+    const file = fileInput.files[0];
+    if (file) {
+        document.getElementById('fileName').textContent = file.name;
+        const sizeMB = (file.size / 1024 / 1024).toFixed(2);
+        document.getElementById('fileSize').textContent = sizeMB + ' MB';
+        document.getElementById('fileInfo').classList.remove('d-none');
+        if (file.size > 50 * 1024 * 1024) {
+            document.getElementById('errorText').textContent = 'File is too large. Maximum size is 50MB.';
+            document.getElementById('error').classList.remove('d-none');
+            uploadBtn.disabled = true;
+        } else {
+            document.getElementById('error').classList.add('d-none');
+            uploadBtn.disabled = false;
+        }
+    }
+}
+
+uploadForm.addEventListener('submit', e => {
+    e.preventDefault();
+    if (!fileInput.files[0]) {
+        document.getElementById('errorText').textContent = 'Please select a file to upload.';
+        document.getElementById('error').classList.remove('d-none');
+        return;
+    }
+    const formData = new FormData();
+    formData.append('document', fileInput.files[0]);
+    formData.append('subject_code', document.getElementById('subjectCode').value);
+    formData.append('chapter', document.getElementById('chapter').value);
+
+    uploadBtn.disabled = true;
+    progressContainer.style.display = 'block';
+    document.getElementById('result').classList.add('d-none');
+    document.getElementById('error').classList.add('d-none');
+
+    const xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener('progress', e => {
+        if (e.lengthComputable) {
+            const pct = Math.round(e.loaded / e.total * 100);
+            progressBar.style.width = pct + '%';
+            progressBar.textContent = pct + '%';
+        }
+    });
+    xhr.addEventListener('load', () => {
+        let data;
+        try {
+            data = JSON.parse(xhr.responseText);
+        } catch (e) {
+            document.getElementById('errorText').textContent = 'Upload failed. Server returned an unexpected response.';
+            document.getElementById('error').classList.remove('d-none');
+            uploadBtn.disabled = false;
+            progressContainer.style.display = 'none';
+            return;
+        }
+        if (xhr.status === 200) {
+            document.getElementById('resultText').textContent =
+                `${data.filename} - ${data.chunk_count} chunks created for ${data.subject_code}`;
+            document.getElementById('result').classList.remove('d-none');
+        } else {
+            document.getElementById('errorText').textContent = data.error || 'Upload failed. Please try again.';
+            document.getElementById('error').classList.remove('d-none');
+            uploadBtn.disabled = false;
+        }
+        progressContainer.style.display = 'none';
+    });
+    xhr.addEventListener('error', () => {
+        document.getElementById('errorText').textContent = 'Network error. Please try again.';
+        document.getElementById('error').classList.remove('d-none');
+        progressContainer.style.display = 'none';
+        uploadBtn.disabled = false;
+    });
+    xhr.open('POST', '{% url "mock_interview:upload_document_api" %}');
+    xhr.setRequestHeader('X-CSRFToken', '{{ csrf_token }}');
+    xhr.send(formData);
+});
+</script>
+{% endblock %}

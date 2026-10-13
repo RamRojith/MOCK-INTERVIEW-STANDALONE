@@ -1,0 +1,16 @@
+# Core runtime (required in DUMMY_MODE)
+Django>=5.0,<6.0
+requests>=2.31
+networkx>=3.0
+pydantic>=2.0
+pypdf>=4.0
+python-docx>=1.1
+reportlab>=4.0
+numpy>=1.26
+
+# ── Optional: only needed when MOCK_INTERVIEW_DUMMY_MODE=false ──────────────
+# Local LLM (Ollama is a separate service; no Python package required)
+# faster-whisper>=1.0        # speech-to-text
+# kokoro-onnx>=0.3           # text-to-speech (or use piper-tts)
+# sentence-transformers>=3.0 # resume/document embeddings
+# qdrant-client>=1.9         # RAG vector store

@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <div>
+        <h4 class="fw-bold mb-1"><i class="fas fa-trophy me-2 text-warning"></i>{{ scope_type|capfirst }}wise Performance Leaderboard</h4>
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="{% url 'mock_interview:mentor_ca_reports' %}">Mentor / CA Reports</a></li>
+                <li class="breadcrumb-item active">{{ scope }}</li>
+            </ol>
+        </nav>
+    </div>
+    <a href="{% url 'mock_interview:mentor_ca_reports' %}" class="btn btn-outline-secondary">
+        <i class="fas fa-arrow-left me-1"></i>Back to Dashboard
+    </a>
+</div>
+
+<p class="text-muted mb-4">
+    <i class="fas fa-users me-1"></i>{{ roster_label|safe }}
+    &middot;
+    <span class="badge {% if scope_type == 'domain' %}bg-info-subtle text-dark border{% else %}bg-light text-dark border{% endif %}">
+        {{ scope }}
+    </span>
+</p>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3 col-sm-6">
+        <div class="content-card h-100 mb-0">
+            <div class="text-muted small fw-semibold">Students Completed</div>
+            <div class="fs-2 fw-bold">{{ total }}</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="content-card h-100 mb-0">
+            <div class="text-muted small fw-semibold">Average Score</div>
+            <div class="fs-2 fw-bold">{{ avg_score|default:"&mdash;" }}</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="content-card h-100 mb-0">
+            <div class="text-muted small fw-semibold">Top Performer</div>
+            {% if best %}
+            <div class="fs-5 fw-bold">{{ best.name }}</div>
+            <div class="text-muted small">{{ best.reg_no }} &middot; {{ best.overall_score }} pts</div>
+            {% else %}
+            <div class="fs-5 fw-bold text-muted">&mdash;</div>
+            {% endif %}
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+        <div class="content-card h-100 mb-0">
+            <div class="text-muted small fw-semibold">Performance Mix</div>
+            <div class="small">
+                <span class="badge bg-success">{{ distribution.excellent }} Excellent</span>
+                <span class="badge bg-info">{{ distribution.good }} Good</span>
+                <span class="badge bg-warning text-dark">{{ distribution.average }} Average</span>
+                <span class="badge bg-danger">{{ distribution.needs_improvement }} Needs Work</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="content-card">
+    <h5 class="fw-bold mb-1">Leaderboard</h5>
+    <p class="text-muted small mb-3">Ranked by each student's latest overall score for this {{ scope_type }} (report score preferred). Ties share a rank.</p>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th class="text-center">Rank</th>
+                    <th>Student</th>
+                    <th>Register No</th>
+                    <th>Dept</th>
+                    <th>Section</th>
+                    <th class="text-center">Attempts</th>
+                    <th class="text-center">Overall Score</th>
+                    <th>Completed</th>
+                    <th class="text-end">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td class="text-center">
+                        <span class="badge fs-6 {{ row.rank_badge }}">
+                            {{ row.rank }}{% if row.rank == 1 %} <i class="fas fa-crown"></i>{% endif %}
+                        </span>
+                    </td>
+                    <td><strong>{{ row.name }}</strong></td>
+                    <td><span class="text-muted">{{ row.reg_no }}</span></td>
+                    <td>{{ row.department }}</td>
+                    <td>{{ row.section|default:"&mdash;" }}</td>
+                    <td class="text-center">{{ row.attempts }}</td>
+                    <td class="text-center">
+                        <span class="badge fs-6 {{ row.band_badge }}">{{ row.overall_score }}</span>
+                        {% if row.technical_score is not None %}
+                        <div class="text-muted small mt-1">Tech {{ row.technical_score }} &middot; Comm {{ row.communication_score }}</div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="badge {{ row.band_badge }}">{{ row.band_label }}</span>
+                        {% if row.completed_date %}<div class="text-muted small mt-1">{{ row.completed_date }}</div>{% endif %}
+                    </td>
+                    <td class="text-end">
+                        {% if row.report_public_id %}
+                        <a class="btn btn-sm btn-outline-primary" href="{% url 'mock_interview:mentor_ca_report_detail' session_public_id=row.report_public_id %}">
+                            <i class="fas fa-file-alt me-1"></i>View Report
+                        </a>
+                        {% else %}
+                        <button class="btn btn-sm btn-outline-secondary" disabled>View Report</button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="9" class="text-center text-muted py-5">
+                        <i class="fas fa-inbox fa-2x mb-2 d-block"></i>
+                        No completed interviews found for this {{ scope_type }}.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

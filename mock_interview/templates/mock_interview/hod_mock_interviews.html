@@ -1,0 +1,584 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+
+{{ summary|json_script:"initial-summary" }}
+{{ students|json_script:"initial-students" }}
+{{ pagination|json_script:"initial-pagination" }}
+{{ filters|json_script:"initial-filters" }}
+{{ options|json_script:"initial-options" }}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-2">
+    <div>
+        <h4 class="fw-bold mb-1">
+            <i class="fas fa-chart-pie me-2"></i>HOD Mock Interview Reports
+        </h4>
+        <p class="text-muted mb-0 small">
+            {% if is_superuser %}
+                All departments
+            {% else %}
+                <i class="fas fa-building me-1"></i>{{ hod_dept_name }} Department
+            {% endif %}
+            &middot; Student mock interview analytics &amp; reports
+        </p>
+    </div>
+    <div class="d-flex gap-2">
+        <button type="button" class="btn btn-outline-secondary" id="clearFiltersBtn" title="Reset all filters">
+            <i class="fas fa-broom me-1"></i>Clear All Filters
+        </button>
+        <a href="{% url 'faculty_dashboard' %}" class="btn btn-outline-primary">
+            <i class="fas fa-tachometer-alt me-1"></i>ERP Dashboard
+        </a>
+    </div>
+</div>
+
+{% if messages %}
+    {% for message in messages %}
+    <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %} alert-dismissible fade show" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    {% endfor %}
+{% endif %}
+
+<div id="errorBanner" class="alert alert-danger d-none" role="alert">
+    <i class="fas fa-exclamation-triangle me-2"></i><span id="errorText">Something went wrong.</span>
+</div>
+
+<div id="loadingOverlay" class="loading-overlay d-none">
+    <div class="loading-content">
+        <div class="spinner-border text-primary" role="status"></div>
+        <div class="mt-2 text-muted">Loading reports...</div>
+    </div>
+</div>
+
+{% comment %}
+────────────────────────────────────────────────────────────────────────
+ FILTER PANEL
+────────────────────────────────────────────────────────────────────────
+{% endcomment %}
+<div class="content-card mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-bold mb-0"><i class="fas fa-filter me-2"></i>Filters</h5>
+        {% if is_superuser %}
+            <span class="badge bg-info text-dark">Superuser &middot; Department filter active</span>
+        {% endif %}
+    </div>
+    <form id="filterForm" class="row g-3">
+        {% if is_superuser %}
+        <div class="col-md-3">
+            <label class="form-label fw-semibold" for="f_department">Department</label>
+            <select class="form-select filter-select" id="f_department" name="department">
+                <option value="">All</option>
+                {% for dept in options.departments %}
+                <option value="{{ dept }}" {% if filters.department == dept %}selected{% endif %}>{{ dept }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% else %}
+        <div class="col-md-3">
+            <label class="form-label fw-semibold" for="f_department">Department</label>
+            <input type="text" class="form-control" id="f_department" value="{{ hod_dept_name }}" disabled>
+        </div>
+        {% endif %}
+        <div class="col-md-3">
+            <label class="form-label fw-semibold" for="f_batch">Batch (Academic Year)</label>
+            <select class="form-select filter-select" id="f_batch" name="batch">
+                <option value="">All</option>
+                {% for batch in options.batches %}
+                <option value="{{ batch }}" {% if filters.batch == batch %}selected{% endif %}>{{ batch }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label fw-semibold" for="f_year">Year</label>
+            <select class="form-select filter-select" id="f_year" name="year">
+                <option value="">All</option>
+                {% for year in options.years %}
+                <option value="{{ year }}" {% if filters.year == year %}selected{% endif %}>{{ year }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label fw-semibold" for="f_section">Section</label>
+            <select class="form-select filter-select" id="f_section" name="section">
+                <option value="">All</option>
+                {% for section in options.sections %}
+                <option value="{{ section }}" {% if filters.section == section %}selected{% endif %}>{{ section }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label fw-semibold" for="f_semester">Semester</label>
+            <select class="form-select filter-select" id="f_semester" name="semester">
+                <option value="">All</option>
+                {% for sem in options.semesters %}
+                <option value="{{ sem }}" {% if filters.semester == sem %}selected{% endif %}>{{ sem }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label fw-semibold" for="f_interview_status">Mock Interview Status</label>
+            <select class="form-select filter-select" id="f_interview_status" name="interview_status">
+                <option value="">All</option>
+                <option value="not_attempted" {% if filters.interview_status == 'not_attempted' %}selected{% endif %}>Not Attempted</option>
+                <option value="attempted" {% if filters.interview_status == 'attempted' %}selected{% endif %}>Attempted</option>
+                <option value="completed" {% if filters.interview_status == 'completed' %}selected{% endif %}>Completed</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label fw-semibold" for="f_performance">Performance</label>
+            <select class="form-select filter-select" id="f_performance" name="performance">
+                <option value="">All</option>
+                <option value="excellent" {% if filters.performance == 'excellent' %}selected{% endif %}>Excellent (85+)</option>
+                <option value="good" {% if filters.performance == 'good' %}selected{% endif %}>Good (70&ndash;84)</option>
+                <option value="average" {% if filters.performance == 'average' %}selected{% endif %}>Average (50&ndash;69)</option>
+                <option value="needs_improvement" {% if filters.performance == 'needs_improvement' %}selected{% endif %}>Needs Improvement (&lt;50)</option>
+            </select>
+        </div>
+    </form>
+
+    <div id="activeFilters" class="d-flex flex-wrap gap-2 mt-3 d-none">
+        <span class="text-muted small align-self-center"><i class="fas fa-tags me-1"></i>Active:</span>
+    </div>
+</div>
+
+{% comment %}
+────────────────────────────────────────────────────────────────────────
+ SUMMARY CARDS
+────────────────────────────────────────────────────────────────────────
+{% endcomment %}
+<div class="row g-3 mb-4">
+    <div class="col-sm-6 col-lg-3">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <div class="text-muted small fw-semibold">Total Students</div>
+                        <div class="display-6 fw-bold" id="statTotal">{{ summary.total_students }}</div>
+                    </div>
+                    <i class="fas fa-users fs-2 stat-icon"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <div class="text-muted small fw-semibold">Attempted</div>
+                        <div class="display-6 fw-bold text-info" id="statAttempted">{{ summary.attempted }}</div>
+                    </div>
+                    <i class="fas fa-microphone fs-2 stat-icon"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <div class="text-muted small fw-semibold">Completed</div>
+                        <div class="display-6 fw-bold text-success" id="statCompleted">{{ summary.completed }}</div>
+                    </div>
+                    <i class="fas fa-check-circle fs-2 stat-icon"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <div class="text-muted small fw-semibold">Not Attempted</div>
+                        <div class="display-6 fw-bold text-secondary" id="statNotAttempted">{{ summary.not_attempted }}</div>
+                    </div>
+                    <i class="fas fa-hourglass-half fs-2 stat-icon"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="text-muted small fw-semibold">Avg Interview Score</div>
+                <div class="fs-3 fw-bold text-primary" id="statAvgScore">
+                    {% if summary.avg_interview_score %}{{ summary.avg_interview_score }}{% else %}0{% endif %}
+                </div>
+                <div class="text-muted small">across latest attempts</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="text-muted small fw-semibold">Avg Technical Score</div>
+                <div class="fs-3 fw-bold text-success" id="statAvgTechnical">
+                    {% if summary.avg_technical_score %}{{ summary.avg_technical_score }}{% else %}0{% endif %}
+                </div>
+                <div class="text-muted small">of completed reports</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="text-muted small fw-semibold">Avg Communication Score</div>
+                <div class="fs-3 fw-bold text-info" id="statAvgComm">
+                    {% if summary.avg_communication_score %}{{ summary.avg_communication_score }}{% else %}0{% endif %}
+                </div>
+                <div class="text-muted small">of completed reports</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card h-100">
+            <div class="card-body">
+                <div class="text-muted small fw-semibold">Completion Rate</div>
+                <div class="fs-3 fw-bold" id="statCompletion">
+                    {% if summary.completion_rate %}{{ summary.completion_rate }}%{% else %}0%{% endif %}
+                </div>
+                <div class="text-muted small">completed &divide; total</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% comment %}
+────────────────────────────────────────────────────────────────────────
+ CHART + TABLE
+────────────────────────────────────────────────────────────────────────
+{% endcomment %}
+<div class="row g-3 mb-4">
+    <div class="col-lg-4">
+        <div class="content-card h-100">
+            <h5 class="fw-bold mb-3"><i class="fas fa-chart-bar me-2"></i>Performance Distribution</h5>
+            <div class="chart-wrap">
+                <canvas id="performanceChart"></canvas>
+            </div>
+            <div class="mt-3 row text-center small" id="chartLegend"></div>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div class="content-card h-100">
+            <h5 class="fw-bold mb-3"><i class="fas fa-users me-2"></i>Student Reports</h5>
+            <div id="emptyState" class="d-none">
+                <div class="text-center text-muted py-5">
+                    <i class="fas fa-user-slash fa-3x mb-3"></i>
+                    <h5 class="fw-bold">No students found</h5>
+                    <p class="mb-0">No students match the selected filters.</p>
+                </div>
+            </div>
+            <div id="tableWrap" class="table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Student</th>
+                            <th>Register No</th>
+                            <th>Dept</th>
+                            <th>Year</th>
+                            <th>Section</th>
+                            <th class="text-center">Interviews</th>
+                            <th class="text-center">Latest Score</th>
+                            <th>Status</th>
+                            <th class="text-end">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="studentTableBody"></tbody>
+                </table>
+            </div>
+            <div id="pagination" class="d-flex justify-content-between align-items-center mt-3"></div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .loading-overlay {
+        position: fixed; inset: 0; z-index: 1050;
+        background: rgba(255, 255, 255, 0.65);
+        display: flex; align-items: center; justify-content: center;
+    }
+    .loading-content { text-align: center; }
+    .stat-card { background: #fff; border: 1px solid var(--rit-border); border-radius: .75rem; box-shadow: var(--rit-shadow); }
+    .stat-icon { color: var(--rit-light); }
+    .chart-wrap { position: relative; height: 220px; }
+</style>
+
+<script>
+(function () {
+    "use strict";
+    const csrf = "{{ csrf_token }}";
+    const reportBaseUrl = "{% url 'mock_interview:hod_report_detail' session_public_id='00000000-0000-0000-0000-000000000000' %}".replace("00000000-0000-0000-0000-000000000000/", "");
+    let currentPage = 1;
+
+    const readInitial = (id, fallback) => {
+        const el = document.getElementById(id);
+        if (!el) return fallback;
+        try { return JSON.parse(el.textContent); } catch (e) { return fallback; }
+    };
+
+    const FILTER_IDS = ["department", "batch", "year", "section", "semester", "interview_status", "performance"];
+    const STATUS_FILTER_IDS = ["department", "batch", "year", "section", "semester"];
+    const FILTER_LABELS = {
+        department: "Dept", batch: "Batch", year: "Year", section: "Section",
+        semester: "Semester", interview_status: "Status", performance: "Performance"
+    };
+    const STATUS_BADGES = { not_attempted: "bg-secondary", attempted: "bg-warning text-dark", completed: "bg-success" };
+    const STATUS_LABELS = { not_attempted: "Not Attempted", attempted: "Attempted", completed: "Completed" };
+    const SCORE_BADGE = (s) => s === null || s === undefined ? "bg-light text-muted" :
+        s >= 85 ? "bg-success" : s >= 70 ? "bg-info text-dark" : s >= 50 ? "bg-warning text-dark" : "bg-danger";
+
+    function buildParams(includePage) {
+        const p = new URLSearchParams();
+        FILTER_IDS.forEach(id => {
+            const v = document.getElementById("f_" + id)?.value || "";
+            if (v) p.set(id, v);
+        });
+        if (includePage) p.set("page", currentPage);
+        return p;
+    }
+
+    function setLoading(on) {
+        document.getElementById("loadingOverlay").classList.toggle("d-none", !on);
+    }
+
+    function showError(msg) {
+        document.getElementById("errorText").textContent = msg;
+        document.getElementById("errorBanner").classList.remove("d-none");
+        window.setTimeout(() => document.getElementById("errorBanner").classList.add("d-none"), 6000);
+    }
+
+    function fmt(v) {
+        if (v === null || v === undefined) return "&mdash;";
+        const n = Number(v);
+        return n % 1 === 0 ? n.toFixed(0) : n.toFixed(1);
+    }
+
+    function updateActiveFilters() {
+        const container = document.getElementById("activeFilters");
+        const chips = [];
+        FILTER_IDS.forEach(id => {
+            const el = document.getElementById("f_" + id);
+            const v = el ? el.value : "";
+            if (!v) return;
+            let label = v;
+            if (id === "interview_status") label = STATUS_LABELS[v] || v;
+            if (id === "performance") {
+                const opt = el.selectedOptions[0];
+                label = opt ? opt.text.split(" (")[0] : v;
+            }
+            chips.push(
+                '<span class="badge rounded-pill bg-light border text-dark d-inline-flex align-items-center gap-1 p-2" style="cursor:default">' +
+                '<span class="text-muted">' + FILTER_LABELS[id] + ':</span> ' + label +
+                ' <button type="button" class="btn-close ms-1" style="font-size:.5rem" data-remove="' + id +
+                '" aria-label="Remove filter"></button></span>'
+            );
+        });
+        container.classList.toggle("d-none", chips.length === 0);
+        let wrap = container.querySelector(".filter-chips");
+        if (!wrap) {
+            wrap = document.createElement("div");
+            wrap.className = "filter-chips d-flex flex-wrap gap-2";
+            container.appendChild(wrap);
+        }
+        wrap.innerHTML = chips.join("");
+        wrap.querySelectorAll("[data-remove]").forEach(btn => {
+            btn.addEventListener("click", function (evt) {
+                evt.preventDefault();
+                const id = btn.getAttribute("data-remove");
+                const el = document.getElementById("f_" + id);
+                if (el) el.value = "";
+                onFilterChange();
+            });
+        });
+    }
+
+    function renderSummary(s) {
+        document.getElementById("statTotal").textContent = s.total_students ?? 0;
+        document.getElementById("statAttempted").textContent = s.attempted ?? 0;
+        document.getElementById("statCompleted").textContent = s.completed ?? 0;
+        document.getElementById("statNotAttempted").textContent = s.not_attempted ?? 0;
+        document.getElementById("statAvgScore").textContent = fmt(s.avg_interview_score);
+        document.getElementById("statAvgTechnical").textContent = fmt(s.avg_technical_score);
+        document.getElementById("statAvgComm").textContent = fmt(s.avg_communication_score);
+        document.getElementById("statCompletion").textContent = (s.completion_rate ?? 0) + "%";
+        renderChart(s.performance_distribution || {});
+    }
+
+    function renderTable(students) {
+        const body = document.getElementById("studentTableBody");
+        const hasData = Array.isArray(students) && students.length > 0;
+        document.getElementById("tableWrap").classList.toggle("d-none", !hasData);
+        document.getElementById("emptyState").classList.toggle("d-none", hasData);
+        if (!hasData) { body.innerHTML = ""; return; }
+        body.innerHTML = students.map(function (st) {
+            const badge = st.status === "completed" ? "bg-success" : st.status === "attempted" ? "bg-warning text-dark" : "bg-secondary";
+            const score = st.latest_score === null || st.latest_score === undefined ?
+                '<span class="text-muted">&mdash;</span>' :
+                '<span class="badge fs-6 ' + SCORE_BADGE(st.latest_score) + '">' + fmt(st.latest_score) + '</span>';
+            const action = (st.report_available && st.report_public_id) ?
+                '<a class="btn btn-sm btn-outline-primary" href="' + reportBaseUrl + st.report_public_id + '/">' +
+                '<i class="fas fa-file-alt me-1"></i>View Report</a>' :
+                '<button class="btn btn-sm btn-outline-secondary" disabled title="No completed interview yet">View Report</button>';
+            return "<tr>" +
+                "<td><strong>" + esc(st.name) + "</strong></td>" +
+                "<td><span class='text-muted'>" + esc(st.reg_no) + "</span></td>" +
+                "<td>" + esc(st.department) + "</td>" +
+                "<td>" + (st.year ? esc(st.year) : "&mdash;") + "</td>" +
+                "<td>" + (st.section ? esc(st.section) : "&mdash;") + "</td>" +
+                '<td class="text-center">' + st.interview_count + "</td>" +
+                '<td class="text-center">' + score + "</td>" +
+                '<td><span class="badge ' + badge + '">' + STATUS_LABELS[st.status] + "</span></td>" +
+                '<td class="text-end">' + action + "</td></tr>";
+        }).join("");
+    }
+
+    function esc(t) {
+        const d = document.createElement("div");
+        d.textContent = t === null || t === undefined ? "" : String(t);
+        return d.innerHTML;
+    }
+
+    function renderPagination(p) {
+        const el = document.getElementById("pagination");
+        if (!p || !p.total) { el.innerHTML = '<span class="text-muted small">0 students</span>'; return; }
+        currentPage = p.page;
+        const prevDisabled = p.page <= 1 ? "disabled" : "";
+        const nextDisabled = p.page >= p.total_pages ? "disabled" : "";
+        el.innerHTML =
+            '<span class="text-muted small">' + p.total + " students &middot; Page " + p.page + " of " + p.total_pages + "</span>" +
+            '<div class="btn-group">' +
+            '<button class="btn btn-sm btn-outline-secondary" id="prevPage" ' + prevDisabled + '><i class="fas fa-chevron-left"></i></button>' +
+            '<button class="btn btn-sm btn-outline-secondary" id="nextPage" ' + nextDisabled + '><i class="fas fa-chevron-right"></i></button>' +
+            "</div>";
+        document.getElementById("prevPage")?.addEventListener("click", () => { if (p.page > 1) { currentPage = p.page - 1; loadData(); } });
+        document.getElementById("nextPage")?.addEventListener("click", () => { if (p.page < p.total_pages) { currentPage = p.page + 1; loadData(); } });
+    }
+
+    function populateSelect(id, values) {
+        const el = document.getElementById("f_" + id);
+        if (!el) return;
+        const current = el.value;
+        const html = ["<option value=''>All</option>"].concat(values.map(v => "<option value='" + esc(v) + "'>" + esc(v) + "</option>")).join("");
+        el.innerHTML = html;
+        el.value = current;
+    }
+
+    function updateUrl() {
+        const p = buildParams(false);
+        const qs = p.toString();
+        const url = window.location.pathname + (qs ? "?" + qs : "");
+        window.history.replaceState({}, "", url);
+    }
+
+    async function loadData() {
+        setLoading(true);
+        try {
+            const res = await fetch("{% url 'mock_interview:hod_reports_api' %}?" + buildParams(true).toString(), {
+                headers: { "X-Requested-With": "XMLHttpRequest" }
+            });
+            if (!res.ok) throw new Error("Bad response");
+            const data = await res.json();
+            renderSummary(data.summary);
+            renderTable(data.students);
+            renderPagination(data.pagination);
+            updateUrl();
+        } catch (e) {
+            showError("Failed to load reports. Please try again.");
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    async function refreshOptions() {
+        try {
+            const params = new URLSearchParams();
+            STATUS_FILTER_IDS.forEach(id => {
+                const v = document.getElementById("f_" + id)?.value || "";
+                if (v) params.set(id, v);
+            });
+            const res = await fetch("{% url 'mock_interview:hod_filter_options_api'}?" + params.toString(), {
+                headers: { "X-Requested-With": "XMLHttpRequest" }
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            ["department", "batch", "year", "section", "semester"].forEach(id => {
+                const key = id === "department" ? "departments" : id === "batch" ? "batches" : id === "year" ? "years" : id === "section" ? "sections" : "semesters";
+                populateSelect(id, data[key] || []);
+            });
+        } catch (e) { /* keep current options */ }
+    }
+
+    let optionsTimer = null;
+    function onFilterChange() {
+        currentPage = 1;
+        loadData();
+        window.clearTimeout(optionsTimer);
+        optionsTimer = window.setTimeout(refreshOptions, 250);
+        updateActiveFilters();
+    }
+
+    function renderChart(dist) {
+        const canvas = document.getElementById("performanceChart");
+        if (!canvas || !window.Chart) return;
+        const labels = ["Excellent (85+)", "Good (70-84)", "Average (50-69)", "Needs Improvement (<50)"];
+        const colors = ["#28a745", "#17a2b8", "#ffc107", "#dc3545"];
+        const values = [dist.excellent || 0, dist.good || 0, dist.average || 0, dist.needs_improvement || 0];
+        const legend = document.getElementById("chartLegend");
+        legend.innerHTML = labels.map(function (l, i) {
+            return '<div class="col-6"><span class="badge" style="background:' + colors[i] + '">&nbsp;</span> ' +
+                "<span class='ms-1'>" + l + ": <strong>" + values[i] + "</strong></span></div>";
+        }).join("");
+        if (window.__perfChart) window.__perfChart.destroy();
+        window.__perfChart = new Chart(canvas, {
+            type: "bar",
+            data: {
+                labels: labels,
+                datasets: [{ label: "Students", data: values, backgroundColor: colors, borderRadius: 6, maxBarThickness: 46 }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, ticks: { precision: 0 } },
+                    x: { ticks: { maxRotation: 0, font: { size: 10 } } }
+                }
+            }
+        });
+    }
+
+    FILTER_IDS.forEach(id => {
+        const el = document.getElementById("f_" + id);
+        if (el) el.addEventListener("change", onFilterChange);
+    });
+
+    document.getElementById("clearFiltersBtn").addEventListener("click", function () {
+        FILTER_IDS.forEach(id => {
+            const el = document.getElementById("f_" + id);
+            if (el && el.tagName === "SELECT") el.value = "";
+        });
+        onFilterChange();
+    });
+
+    // Initial render (from server-injected data) keeps the page consistent
+    // before the first live fetch happens.
+    document.addEventListener("DOMContentLoaded", function () {
+        renderSummary(readInitial("initial-summary", {}));
+        renderTable(readInitial("initial-students", []));
+        renderPagination(readInitial("initial-pagination", {}));
+        updateActiveFilters();
+        currentPage = 1;
+        loadData();
+    });
+})();
+</script>
+{% endblock %}
+
+

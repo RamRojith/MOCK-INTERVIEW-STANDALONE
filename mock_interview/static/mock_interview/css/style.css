@@ -1,0 +1,4 @@
+/* All Mock Interview styles removed.
+   The module now inherits the ERP design system from base.html.
+   See: templates/base.html for CSS variables and layout,
+        bootstrap/css/bootstrap.min.css for utility classes. */

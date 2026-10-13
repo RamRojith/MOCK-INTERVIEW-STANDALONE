@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h4 class="fw-bold mb-1"><i class="fas fa-user-graduate me-2"></i>{{ session.student_name|default:"Student" }}</h4>
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="{% url 'mock_interview:mentor_ca_reports' %}">Mentor / CA Reports</a></li>
+                <li class="breadcrumb-item active">{{ session.student_name|default:session.student_employee_id }}</li>
+            </ol>
+        </nav>
+    </div>
+    <div>
+        {% if report and report.pdf_file %}
+            <a href="{% url 'mock_interview:mentor_ca_report_pdf' session_public_id=session.public_id %}" class="btn btn-outline-primary me-2">
+                <i class="fas fa-download me-1"></i>PDF
+            </a>
+        {% endif %}
+        <a href="{% url 'mock_interview:mentor_ca_reports' %}" class="btn btn-outline-secondary">
+            <i class="fas fa-arrow-left me-1"></i>Back to Reports
+        </a>
+    </div>
+</div>
+
+{% if student %}
+<p class="text-muted mb-3">
+    <i class="fas fa-id-badge me-1"></i>{{ student.reg_no }}
+    {% if student.department %}&middot; {{ student.department.Department }}{% endif %}
+    {% if student.year %}&middot; {{ student.year }}{% endif %}
+    {% if student.batch %}&middot; Batch {{ student.batch }}{% endif %}
+    {% if student.section %}&middot; Section {{ student.section }}{% endif %}
+</p>
+{% endif %}
+
+{% include "mock_interview/partials/student_report_content.html" %}
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Login · Mock Interview{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-5">
+        <div class="card shadow-sm mt-5">
+            <div class="card-body p-4">
+                <h1 class="h4 mb-3">Sign in</h1>
+                {% if form.errors %}
+                    <div class="alert alert-danger">Invalid Employee ID or password.</div>
+                {% endif %}
+                <form method="post" action="{% url 'login_view' %}">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label class="form-label" for="id_username">Employee ID</label>
+                        <input type="text" name="username" id="id_username"
+                               class="form-control" autofocus required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="id_password">Password</label>
+                        <input type="password" name="password" id="id_password"
+                               class="form-control" required>
+                    </div>
+                    <input type="hidden" name="next" value="{{ next }}">
+                    <button type="submit" class="btn btn-primary w-100">Login</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

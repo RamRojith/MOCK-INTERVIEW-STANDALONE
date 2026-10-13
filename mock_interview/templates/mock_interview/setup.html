@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+<div class="text-center mb-4">
+    <h3 class="fw-bold">Interview configuration</h3>
+    <p class="text-muted">Configure the role, round, difficulty and local voice mode.</p>
+</div>
+{% if messages %}{% for message in messages %}<div class="alert alert-danger">{{ message }}</div>{% endfor %}{% endif %}
+<form class="content-card" method="post" style="max-width: 1000px; margin: 0 auto;">
+    {% csrf_token %}
+    <div class="row g-3">
+        <div class="col-md-6">
+            <label class="form-label" for="interviewType">Interview type</label>
+            <select class="form-select" id="interviewType" name="interview_type">
+                <option value="mixed">Resume and role based</option>
+                <option value="resume">Resume based</option>
+                <option value="role">Role based</option>
+            </select>
+        </div>
+        <div class="col-md-6">
+            <label class="form-label" for="resume">Resume</label>
+            <select class="form-select" id="resume" name="resume">
+                <option value="">No resume</option>
+                {% for resume in resumes %}
+                <option value="{{ resume.public_id }}" {% if selected_resume and selected_resume.pk == resume.pk %}selected{% endif %}>{{ resume.original_filename }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-6">
+            <label class="form-label" for="role">Target job title</label>
+            <input class="form-control" id="role" name="role" maxlength="150" placeholder="AI Engineer" required>
+        </div>
+        <div class="col-md-6">
+            <label class="form-label" for="company">Company style (optional)</label>
+            <input class="form-control" id="company" name="company_name" maxlength="150" placeholder="Product company style">
+            <div class="form-text">The AI will not claim access to private company questions.</div>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label" for="round">Interview round</label>
+            <select class="form-select" id="round" name="interview_round" required>
+                <option>Technical</option><option>HR</option><option>Behavioural</option>
+                <option>Project Discussion</option><option>Managerial</option><option>Mixed</option>
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label" for="difficulty">Difficulty</label>
+            <select class="form-select" id="difficulty" name="difficulty" required>
+                <option>Beginner</option><option selected>Intermediate</option><option>Advanced</option>
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label" for="language">Language</label>
+            <select class="form-select" id="language" name="language_mode">
+                <option value="en">English</option>
+                <option value="ta" disabled>Tamil (requires Indic-TTS deployment)</option>
+                <option value="mixed" disabled>Tamil-English mixed (requires Indic-TTS deployment)</option>
+            </select>
+        </div>
+        <div class="col-md-6">
+            <label class="form-label" for="skills">Target skills</label>
+            <input class="form-control" id="skills" name="target_skills" placeholder="Python, Django, SQL">
+        </div>
+        <div class="col-md-3">
+            <label class="form-label" for="count">Questions</label>
+            <select class="form-select" id="count" name="question_count">
+                <option>3</option><option selected>5</option><option>10</option><option>15</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label" for="duration">Duration</label>
+            <select class="form-select" id="duration" name="duration_minutes">
+                <option value="10">10 minutes</option><option value="15" selected>15 minutes</option>
+                <option value="20">20 minutes</option><option value="30">30 minutes</option>
+            </select>
+        </div>
+        <div class="col-12">
+            <label class="form-label" for="description">Job description and focus</label>
+            <textarea class="form-control" id="description" name="job_description" rows="5" maxlength="8000" placeholder="Paste the public job description or describe the topics you want to practise."></textarea>
+        </div>
+        <div class="col-md-6">
+            <label class="form-label" for="voice">English interviewer voice</label>
+            <select class="form-select" id="voice" name="interviewer_voice">
+                <option value="af_heart">Professional female</option>
+                <option value="am_adam">Professional male</option>
+            </select>
+        </div>
+    </div>
+    <div class="d-flex justify-content-between mt-4">
+        <a class="btn btn-outline-secondary" href="{% url 'mock_interview:dashboard' %}">Back</a>
+        <button class="btn btn-primary px-4" type="submit">Continue to device check</button>
+    </div>
+</form>
+{% endblock %}

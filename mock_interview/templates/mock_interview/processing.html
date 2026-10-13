@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+<div class="text-center" style="max-width: 650px; margin: 0 auto;">
+    <div class="content-card">
+        <div id="spinner" class="spinner-border text-primary mx-auto mb-3" role="status"></div>
+        <h4 class="fw-bold">Preparing your coaching report</h4>
+        <p id="statusText" class="text-muted">Checking the validated evaluation results...</p>
+        <div class="progress"><div class="progress-bar progress-bar-striped progress-bar-animated" style="width:75%"></div></div>
+        <a id="dashboardLink" class="btn btn-outline-secondary mt-4" href="{% url 'mock_interview:dashboard' %}">Return to dashboard</a>
+    </div>
+</div>
+<script>
+(() => {
+    const statusUrl = "{% url 'mock_interview:session_status' session.public_id %}";
+    const generateUrl = "{% url 'mock_interview:generate_report' session.public_id %}";
+    const csrf = "{{ csrf_token }}";
+    let reportInFlight = false;
+    let retryCount = 0;
+    const MAX_RETRIES = 12;
+    function showError(message) {
+        document.getElementById("spinner").classList.add("d-none");
+        document.querySelector(".progress")?.classList.add("d-none");
+        document.getElementById("statusText").textContent = message;
+    }
+    function showStatus(text) {
+        document.getElementById("statusText").textContent = text;
+    }
+    async function requestReport() {
+        if (reportInFlight) return;
+        reportInFlight = true;
+        showStatus("Generating personalized feedback from your evaluated answers...");
+        try {
+            const response = await fetch(generateUrl, {
+                method: "POST",
+                headers: {"X-CSRFToken": csrf}
+            });
+            const result = await response.json();
+            if (result.status === "report_ready" && result.report_url) {
+                window.location.href = result.report_url;
+            } else if (result.status === "failed") {
+                showError(result.error || "Report generation failed.");
+            } else if (!response.ok) {
+                throw new Error(result.error || "Report generation failed.");
+            }
+        } catch (error) {
+            retryCount++;
+            if (retryCount > MAX_RETRIES) {
+                showError(`Report generation did not complete after several attempts. ${error.message}`);
+                return;
+            }
+            showStatus(`${error.message} Retrying shortly...`);
+            setTimeout(requestReport, 5000);
+        } finally {
+            reportInFlight = false;
+        }
+    }
+    async function check() {
+        try {
+            const response = await fetch(statusUrl);
+            const result = await response.json();
+            if (result.status === "report_ready" && result.report_url) {
+                window.location.href = result.report_url;
+                return;
+            }
+            if (result.status === "failed") {
+                showError(result.error || "Report generation failed.");
+                return;
+            }
+            if (result.status === "completed") {
+                requestReport();
+                showStatus("Generating personalized feedback from your evaluated answers...");
+            } else {
+                showStatus(`Current stage: ${result.status}`);
+            }
+            setTimeout(check, 2000);
+        } catch (_) {
+            showStatus("Connection interrupted. Retrying...");
+            setTimeout(check, 3000);
+        }
+    }
+    requestReport();
+    check();
+})();
+</script>
+{% endblock %}

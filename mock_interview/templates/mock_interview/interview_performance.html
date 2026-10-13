@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h4 class="fw-bold mb-1"><i class="fas fa-chart-bar me-2"></i>Student Performance</h4>
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="{% url 'mock_interview:faculty_dashboard' %}">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="{% url 'mock_interview:interview_detail_page' interview_id=interview.id %}">{{ interview.title }}</a></li>
+                <li class="breadcrumb-item active">Performance</li>
+            </ol>
+        </nav>
+    </div>
+    <a href="{% url 'mock_interview:interview_detail_page' interview_id=interview.id %}" class="btn btn-outline-secondary">
+        <i class="fas fa-arrow-left me-1"></i>Back to Interview
+    </a>
+</div>
+
+<div class="content-card mb-4">
+    <h5 class="fw-bold mb-3">{{ interview.title }}</h5>
+    <div class="row text-muted">
+        <div class="col-md-3"><i class="fas fa-book me-1"></i>{{ interview.subject_code }}</div>
+        <div class="col-md-3"><i class="fas fa-layer-group me-1"></i>{{ interview.get_difficulty_display }}</div>
+        <div class="col-md-3"><i class="fas fa-list-ol me-1"></i>{{ interview.question_count }} questions</div>
+        <div class="col-md-3"><i class="fas fa-clock me-1"></i>{{ interview.duration_minutes }} min</div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card text-center h-100">
+            <div class="card-body">
+                <h6 class="text-muted">Total Assigned</h6>
+                <h3 class="fw-bold">{{ total_assigned }}</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center h-100">
+            <div class="card-body">
+                <h6 class="text-muted">Completed</h6>
+                <h3 class="fw-bold">{{ total_completed }}</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center h-100">
+            <div class="card-body">
+                <h6 class="text-muted">Avg Score</h6>
+                <h3 class="fw-bold">{% if avg_score %}{{ avg_score|floatformat:1 }}{% else %}--{% endif %}</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center h-100">
+            <div class="card-body">
+                <h6 class="text-muted">Completion Rate</h6>
+                <h3 class="fw-bold">{% if total_assigned %}{% widthratio total_completed total_assigned 100 %}%{% else %}--{% endif %}</h3>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="content-card">
+    <h5 class="fw-bold mb-3"><i class="fas fa-users me-2"></i>Student Results</h5>
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Student</th>
+                    <th>Status</th>
+                    <th>Started</th>
+                    <th>Completed</th>
+                    <th class="text-center">Score</th>
+                    <th class="text-center">Technical</th>
+                    <th class="text-center">Communication</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for result in student_results %}
+                <tr>
+                    <td>
+                        <strong>{{ result.student_name }}</strong>
+                        <br><small class="text-muted">{{ result.student_id }}</small>
+                    </td>
+                    <td>
+                        {% if result.status == 'completed' %}
+                            <span class="badge bg-success">Completed</span>
+                        {% elif result.status == 'in_progress' %}
+                            <span class="badge bg-warning">In Progress</span>
+                        {% elif result.status == 'expired' %}
+                            <span class="badge bg-danger">Expired</span>
+                        {% else %}
+                            <span class="badge bg-secondary">Assigned</span>
+                        {% endif %}
+                    </td>
+                    <td>{% if result.started_at %}{{ result.started_at|date:"M d, H:i" }}{% else %}--{% endif %}</td>
+                    <td>{% if result.completed_at %}{{ result.completed_at|date:"M d, H:i" }}{% else %}--{% endif %}</td>
+                    <td class="text-center">
+                        {% if result.score is not None %}
+                            <span class="badge fs-6 {% if result.score >= 70 %}bg-success{% elif result.score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %}">
+                                {{ result.score|floatformat:1 }}
+                            </span>
+                        {% else %}
+                            <span class="text-muted">--</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if result.technical_score is not None %}
+                            {{ result.technical_score|floatformat:1 }}
+                        {% else %}
+                            <span class="text-muted">--</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if result.communication_score is not None %}
+                            {{ result.communication_score|floatformat:1 }}
+                        {% else %}
+                            <span class="text-muted">--</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if result.report_url %}
+                            <a href="{% url 'mock_interview:student_report_detail' interview_id=interview.id session_public_id=result.report_url %}" class="btn btn-sm btn-outline-primary">
+                                <i class="fas fa-file-alt me-1"></i>Report
+                            </a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8" class="text-center text-muted py-4">
+                        <i class="fas fa-inbox me-2"></i>No students have been assigned yet.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

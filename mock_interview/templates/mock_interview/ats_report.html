@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+<style>
+  .ats-wrap { max-width: 1100px; margin: 0 auto; }
+  .ats-score-ring { width: 150px; height: 150px; border-radius: 50%; }
+  .ats-dim { padding: .6rem 0; border-bottom: 1px solid var(--rit-border, #edf1f7); }
+  .ats-dim:last-child { border-bottom: 0; }
+  .ats-dim-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+  .ats-dim-bar { height: 7px; border-radius: 7px; background: var(--rit-border, #e2e8f0); overflow: hidden; margin: .4rem 0; }
+  .ats-dim-fill { height: 100%; border-radius: 7px; }
+  .ats-dim-fill.good { background: #1e7e34; }
+  .ats-dim-fill.needs_improvement { background: #d39e00; }
+  .ats-dim-fill.critical { background: #c0324a; }
+  .ats-dim-fill.not_evaluable { background: #9aa5b1; }
+  .ats-status { font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; }
+  .ats-status.good { color: #1e7e34; }
+  .ats-status.needs_improvement { color: #b8860b; }
+  .ats-status.critical { color: #c0324a; }
+  .ats-status.not_evaluable { color: #6b7280; }
+  .ats-finding { font-size: .85rem; color: var(--rit-text-muted, #64748b); margin-top: .15rem; }
+  .ats-chip { display: inline-flex; align-items: center; gap: .35rem; border-radius: 999px; padding: .3rem .7rem; font-size: .8rem; }
+  .ats-chip.ok { background: rgba(40, 167, 69, .12); color: #1e7e34; }
+  .ats-chip.miss { background: rgba(220, 53, 69, .12); color: #c0324a; }
+</style>
+
+<div class="text-center mb-4">
+  <h3 class="fw-bold"><i class="fas fa-file-check me-2"></i>ATS Resume Report</h3>
+  <p class="text-muted">{{ check.source_resume.original_filename }}</p>
+</div>
+
+{% if check.status == "failed" %}
+  <div class="content-card ats-wrap mb-4">
+    <div class="alert alert-danger mb-0">Analysis failed. {{ check.error_message }}</div>
+    <a class="btn btn-outline-secondary mt-3" href="{% url 'mock_interview:ats_checker' %}">Try again</a>
+  </div>
+{% elif check.status == "analyzing" %}
+  <div class="content-card ats-wrap mb-4">
+    <div class="d-flex align-items-center gap-3">
+      <div class="spinner-border text-primary" role="status"></div>
+      <div>Analysis in progress. Refresh in a moment.</div>
+    </div>
+  </div>
+{% else %}
+  {# ── Score + explanation ─────────────────────────────────────────── #}
+  <div class="row g-3 mb-4 ats-wrap">
+    <div class="col-md-4">
+      <div class="content-card h-100 text-center">
+        <div class="ats-score-ring d-inline-flex align-items-center justify-content-center
+             {% if check.score >= 70 %}bg-success{% elif check.score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %} text-white">
+          <div>
+            <div class="display-4 fw-bold">{{ check.score|floatformat:0 }}</div>
+            <div>/100</div>
+          </div>
+        </div>
+        <div class="fw-semibold mt-3">{{ check.score_label }}</div>
+        <div class="text-muted small">
+          {% if check.analysis_mode == "resume_plus_jd" %}
+            Resume vs. job description
+          {% else %}
+            Resume ATS Score (no job description &mdash; quality only)
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-md-8">
+      <div class="content-card h-100">
+        <h5 class="fw-bold mb-3"><i class="fas fa-circle-info me-2"></i>Why this score</h5>
+        <ul class="mb-0">
+          {% for line in check.score_explanation %}<li class="mb-1">{{ line }}</li>{% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  {# ── Dimension scores ───────────────────────────────────────────── #}
+  <div class="content-card ats-wrap mb-4">
+    <h5 class="fw-bold mb-3"><i class="fas fa-tachometer-alt me-2"></i>Dimension scores</h5>
+    {% for key, dim in check.dimension_scores.items %}
+    <div class="ats-dim">
+      <div class="ats-dim-head">
+        <div class="fw-semibold">{{ dim.label|default:key }}</div>
+        <div class="text-nowrap">
+          <span class="ats-status {{ dim.status }}">{% if dim.status == "not_evaluable" %}not evaluable{% elif dim.status == "needs_improvement" %}needs work{% else %}{{ dim.status }}{% endif %}</span>
+          <span class="ms-2 fw-semibold">
+            {% if dim.status == "not_evaluable" %}&ndash;{% else %}{{ dim.score }}{% endif %}/{{ dim.max }}
+          </span>
+        </div>
+      </div>
+      <div class="ats-dim-bar">
+        {% widthratio dim.score dim.max 100 as pct %}
+        <div class="ats-dim-fill {{ dim.status }}" style="width: {% if dim.status == 'not_evaluable' %}100{% else %}{{ pct }}{% endif %}%; {% if dim.status == 'not_evaluable' %}opacity:.35{% endif %}"></div>
+      </div>
+      {% for finding in dim.findings %}<div class="ats-finding">&bull; {{ finding }}</div>{% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── Issues ─────────────────────────────────────────────────────── #}
+  <div class="row g-3 mb-4 ats-wrap">
+    <div class="col-md-6">
+      <div class="content-card h-100">
+        <h5 class="fw-bold mb-3"><i class="fas fa-triangle-exclamation me-2"></i>Critical &amp; warning issues</h5>
+        {% for issue in check.issues %}
+          {% if issue.severity == "critical" or issue.severity == "warning" %}
+          <div class="d-flex gap-2 mb-2">
+            <span class="badge {% if issue.severity == 'critical' %}bg-danger{% else %}bg-warning text-dark{% endif %}">{{ issue.severity }}</span>
+            <div>{{ issue.message }}</div>
+          </div>
+          {% endif %}
+        {% empty %}
+        <p class="text-muted mb-0">No major issues detected.</p>
+        {% endfor %}
+        {% if check.personal_info_flags %}
+        <hr>
+        <div class="small text-muted">
+          <i class="fas fa-user-shield me-1"></i>Personal information to remove:
+          {{ check.personal_info_flags|join:", " }}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="content-card h-100">
+        <h5 class="fw-bold mb-3"><i class="fas fa-lightbulb me-2"></i>Top recommendations</h5>
+        <ol class="mb-0">
+          {% for item in check.recommendations %}<li class="mb-2">{{ item }}</li>{% empty %}<li class="text-muted">Nothing critical &mdash; polish wording and quantify results.</li>{% endfor %}
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  {# ── Action-verb analysis ──────────────────────────────────────── #}
+  {% if check.action_verb_analysis.message %}
+  <div class="content-card ats-wrap mb-4">
+    <h5 class="fw-bold mb-2"><i class="fas fa-bolt me-2"></i>Action-verb analysis</h5>
+    <p class="mb-1">
+      <span class="ats-status {{ check.action_verb_analysis.status }}">{% if check.action_verb_analysis.status == "not_evaluable" %}not evaluable{% elif check.action_verb_analysis.status == "needs_improvement" %}needs work{% else %}{{ check.action_verb_analysis.status }}{% endif %}</span>
+      &nbsp;{{ check.action_verb_analysis.message }}
+    </p>
+    <p class="text-muted small mb-0">{{ check.action_verb_analysis.recommendation }}</p>
+  </div>
+  {% endif %}
+
+  {# ── Keyword analysis (JD mode only) ───────────────────────────── #}
+  {% if check.analysis_mode == "resume_plus_jd" %}
+  <div class="content-card ats-wrap mb-4">
+    <h5 class="fw-bold mb-3"><i class="fas fa-tags me-2"></i>Keyword analysis</h5>
+    <div class="mb-2">
+      <div class="text-muted small mb-1">Matched</div>
+      <div>
+        {% for kw in check.matched_keywords %}<span class="ats-chip ok me-1 mb-1"><i class="fas fa-check-circle"></i>{{ kw }}</span>{% empty %}<span class="text-muted">None</span>{% endfor %}
+      </div>
+    </div>
+    <div>
+      <div class="text-muted small mb-1">Missing from resume</div>
+      <div>
+        {% for kw in check.missing_keywords %}<span class="ats-chip miss me-1 mb-1"><i class="fas fa-times-circle"></i>{{ kw }}</span>{% empty %}<span class="text-muted">None &mdash; great match!</span>{% endfor %}
+      </div>
+    </div>
+    <p class="text-muted small mt-2 mb-0">Only add missing keywords where your experience genuinely supports them.</p>
+  </div>
+  {% endif %}
+
+  {# ── Download ──────────────────────────────────────────────────── #}
+  <div class="content-card ats-wrap mb-4">
+    <h5 class="fw-bold mb-3"><i class="fas fa-download me-2"></i>Download your ATS-friendly resume</h5>
+    <p class="text-muted">
+      Single-column, machine-readable layout with standard section order. Your own
+      wording is preserved &mdash; missing details are left as <code>[Add ...]</code> placeholders, never invented.
+    </p>
+    {% if check.rewrite_warnings %}
+    <div class="alert alert-warning small">
+      {% for warning in check.rewrite_warnings %}<div>{{ warning }}</div>{% endfor %}
+    </div>
+    {% endif %}
+    <div class="d-flex flex-wrap gap-2">
+      {% if check.generated_docx %}
+      <a class="btn btn-primary" href="{% url 'mock_interview:ats_download_docx' public_id=check.public_id %}">
+        <i class="fas fa-file-word me-1"></i>Download DOCX
+      </a>
+      {% endif %}
+      {% if check.generated_pdf %}
+      <a class="btn btn-outline-primary" href="{% url 'mock_interview:ats_download_pdf' public_id=check.public_id %}">
+        <i class="fas fa-file-pdf me-1"></i>Download PDF
+      </a>
+      {% endif %}
+      <a class="btn btn-outline-secondary" href="{% url 'mock_interview:ats_checker' %}">
+        <i class="fas fa-redo me-1"></i>Check another resume
+      </a>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}
