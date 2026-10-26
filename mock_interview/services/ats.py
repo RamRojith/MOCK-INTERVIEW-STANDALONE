@@ -170,16 +170,30 @@ _SECTION_SYNONYMS = {
         "experience", "work experience", "professional experience",
         "employment", "employment history", "work history", "career history",
         "professional background", "relevant experience", "industry experience",
+        "internships & experience", "internship & experience",
+        "experience & internships", "internships and experience",
+        "experience and internships",
     ),
     "internships": (
         "internship", "internships", "internship experience", "training",
         "industrial training", "in-plant training", "apprenticeship",
     ),
     "projects": (
-        "projects", "project", "academic projects", "personal projects",
-        "key projects", "notable projects", "selected projects",
-        "project experience", "projects undertaken", "capstone project",
-        "major projects", "mini projects", "project work",
+        "projects", "project", "personal projects", "key projects",
+        "notable projects", "selected projects", "project experience",
+        "projects undertaken", "major projects", "project work",
+    ),
+    "real_projects": (
+        "real-time projects", "real time projects", "real-time project",
+        "real time project", "professional projects", "industry projects",
+        "production projects", "applied projects",
+    ),
+    "academic_projects": (
+        "academic projects", "academic project", "college projects",
+        "college project", "university projects", "university project",
+        "course projects", "course project", "coursework projects",
+        "coursework project", "capstone project", "capstone projects",
+        "mini projects", "mini project", "academic mini projects",
     ),
     "education": (
         "education", "education details", "educational qualifications",
@@ -232,7 +246,8 @@ _SECTION_SYNONYMS = {
 
 _CORE_SECTIONS = ("contact", "education", "skills")
 _EVIDENCE_SECTIONS = (
-    "experience", "internships", "projects", "achievements", "activities",
+    "experience", "internships", "projects", "real_projects",
+    "academic_projects", "achievements", "activities",
 )
 
 # Curated multi-word skills / tools worth detecting as JD keywords.

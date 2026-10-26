@@ -13,6 +13,9 @@ env/
 .env.*
 *.log
 
+# Per-machine overrides (e.g. speech model choice for this CPU)
+mock_interview_site/local_settings.py
+
 media/
 staticfiles/
 *.sqlite3

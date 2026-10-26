@@ -81,6 +81,11 @@ urlpatterns = [
     ),
     path("api/runtime/status/", views.runtime_status, name="runtime_status"),
     path(
+        "api/runtime/tts/sample/",
+        views.tts_sample,
+        name="runtime_tts_sample",
+    ),
+    path(
         "api/sessions/<uuid:public_id>/report.pdf",
         views.report_pdf,
         name="report_pdf",

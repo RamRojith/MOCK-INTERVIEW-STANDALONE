@@ -30,7 +30,7 @@
         </div>
     </header>
 
-    <div id="notice" class="alert alert-info">Listen to the question, then record your answer.</div>
+    <div id="notice" class="alert alert-info" role="status" aria-live="polite">Listen to the question, then record your answer.</div>
 
     <main class="mi-interview-main">
         <section class="mi-panel mi-panel-question">
@@ -39,11 +39,15 @@
                 <p class="mi-question fs-5">{{ question.question_text }}</p>
                 {% if question.audio_file %}
                     <div class="mi-audio-wrap">
-                        <audio id="questionAudio" controls autoplay src="{% url 'mock_interview:question_audio' question.public_id %}"></audio>
+                        <audio id="questionAudio" controls preload="auto" src="{% url 'mock_interview:question_audio' question.public_id %}"></audio>
                         <button id="repeatButton" class="btn btn-outline-secondary" type="button">Repeat question</button>
                     </div>
                 {% else %}
-                    <div class="alert alert-warning">Local TTS is unavailable. Read the stored question text above.</div>
+                    <div class="alert alert-danger" role="alert">
+                        <strong>Question audio is unavailable.</strong>
+                        {{ audio_error|default:"The local TTS service could not generate this question." }}
+                        <button id="retryAudioButton" class="btn btn-sm btn-outline-danger ms-2" type="button">Retry question audio</button>
+                    </div>
                 {% endif %}
             </div>
         </section>
@@ -52,9 +56,10 @@
             <div class="mi-panel-head"><i class="fas fa-video"></i>Your answer</div>
             <div class="mi-panel-body">
                 <video id="studentVideo" autoplay muted playsinline class="mi-video mb-3" style="aspect-ratio:16/9;object-fit:cover"></video>
-                <div class="d-flex gap-2 mb-3">
+                <div class="d-flex gap-2 mb-3 flex-wrap">
                     <button id="recordButton" class="btn btn-primary" type="button">{% if draft_answer %}Re-record answer{% else %}Start answer{% endif %}</button>
                     <button id="stopButton" class="btn btn-danger" type="button" disabled>Stop and transcribe</button>
+                    <button id="retryButton" class="btn btn-outline-danger d-none" type="button">Retry transcription</button>
                 </div>
                 <label class="form-label fw-bold" for="transcript">Automatic transcript — review and correct every error</label>
                 <textarea id="transcript" class="form-control mb-3" rows="6" placeholder="Your local Faster-Whisper transcript will appear here." {% if not draft_answer %}readonly{% endif %}>{{ draft_answer.corrected_transcript|default:"" }}</textarea>
@@ -87,7 +92,7 @@ window.MOCK_INTERVIEW_FOCUS_GUARD = {
     enforceFullscreen: true,
     fullscreenTriggerSelector: "#recordButton",
     onLockout: function () {
-        ["recordButton", "stopButton", "submitButton", "skipButton", "endButton"].forEach(function (id) {
+        ["recordButton", "stopButton", "retryButton", "submitButton", "skipButton", "endButton"].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) { el.disabled = true; el.classList.add("disabled"); }
         });
@@ -104,192 +109,936 @@ window.MOCK_INTERVIEW_FOCUS_GUARD = {
 })();
 </script>
 <script>
+/* =====================================================================
+ * Interview room voice loop
+ * =====================================================================
+ * question audio -> answer recording -> upload -> local STT -> review ->
+ * submit -> next question.
+ *
+ * The loop is an explicit state machine so a slow upload, a blocked
+ * autoplay, a second click or a stale MediaRecorder callback can never move
+ * the interview to the next question before the current answer has been
+ * captured and transcribed.
+ *
+ *   GENERATING_QUESTION -> SYNTHESIZING_AUDIO -> PLAYING_QUESTION
+ *   -> READY_TO_ANSWER -> LISTENING -> TRANSCRIBING
+ *   -> REVIEWING_TRANSCRIPT -> PROCESSING_ANSWER -> LOADING_NEXT_QUESTION
+ *
+ * Failure paths (microphone denied, question audio missing/unplayable,
+ * transcription error/timeout) return to an actionable state with a retry
+ * affordance. A question-audio failure never silently unlocks the microphone:
+ * the student sees the real error and can retry the audio.
+ * ===================================================================== */
 (() => {
+    "use strict";
+
+    const LOG_PREFIX = "[mock-interview:room]";
     const csrf = "{{ csrf_token }}";
     const guard = window.MockInterviewFocusGuard;
     const transcribeUrl = "{% url 'mock_interview:transcribe_answer' question.public_id %}";
     const skipUrl = "{% url 'mock_interview:skip_question' question.public_id %}";
     const endUrl = "{% url 'mock_interview:end_interview' session.public_id %}";
-    const notice = document.getElementById("notice");
-    const recordButton = document.getElementById("recordButton");
-    const stopButton = document.getElementById("stopButton");
-    const submitButton = document.getElementById("submitButton");
-    const transcript = document.getElementById("transcript");
-    const transcriptWarning = document.getElementById("transcriptWarning");
-    const transcriptConfirmation = document.getElementById("transcriptConfirmation");
-    const confirmTranscript = document.getElementById("confirmTranscript");
+    const initialSubmitUrl = {% if draft_answer %}"{% url 'mock_interview:submit_answer' draft_answer.public_id %}"{% else %}null{% endif %};
+    const hasDraft = {% if draft_answer %}true{% else %}false{% endif %};
     const isFinalQuestion = "{{ is_final_question|yesno:'true,false' }}" === "true";
-    let stream, recorder, chunks = [];
-    let submitUrl = "{% if draft_answer %}{% url 'mock_interview:submit_answer' draft_answer.public_id %}{% endif %}" || null;
-    let submitting = false;
+    // CPU Whisper on a large model can be slow; keep the request alive long
+    // enough for real inference but never leave the UI waiting forever.
+    const TRANSCRIBE_TIMEOUT_MS = 300000;
+    const MIME_CANDIDATES = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+        "audio/mp4"
+    ];
 
-    function show(message, type="info") {
-        notice.className = `alert alert-${type}`;
-        notice.textContent = message;
+    const els = {
+        notice: document.getElementById("notice"),
+        recordButton: document.getElementById("recordButton"),
+        stopButton: document.getElementById("stopButton"),
+        retryButton: document.getElementById("retryButton"),
+        submitButton: document.getElementById("submitButton"),
+        skipButton: document.getElementById("skipButton"),
+        endButton: document.getElementById("endButton"),
+        transcript: document.getElementById("transcript"),
+        transcriptWarning: document.getElementById("transcriptWarning"),
+        confirmation: document.getElementById("transcriptConfirmation"),
+        confirmTranscript: document.getElementById("confirmTranscript"),
+        audio: document.getElementById("questionAudio"),
+        repeatButton: document.getElementById("repeatButton"),
+        retryAudioButton: document.getElementById("retryAudioButton"),
+        video: document.getElementById("studentVideo"),
+        timer: document.getElementById("timer")
+    };
+
+    const STATE = Object.freeze({
+        GENERATING: "GENERATING_QUESTION",
+        SYNTHESIZING: "SYNTHESIZING_AUDIO",
+        PLAYING: "PLAYING_QUESTION",
+        READY: "READY_TO_ANSWER",
+        LISTENING: "LISTENING",
+        TRANSCRIBING: "TRANSCRIBING",
+        REVIEW: "REVIEWING_TRANSCRIPT",
+        PROCESSING: "PROCESSING_ANSWER",
+        NEXT: "LOADING_NEXT_QUESTION"
+    });
+    const BUSY_STATES = new Set([
+        STATE.TRANSCRIBING,
+        STATE.PROCESSING,
+        STATE.NEXT
+    ]);
+
+    if (!els.recordButton || !els.stopButton || !els.submitButton || !els.transcript) {
+        console.error(LOG_PREFIX, "room markup is incomplete; the voice loop cannot start");
+        return;
     }
-    function cleanup() { if (stream) stream.getTracks().forEach(track => track.stop()); }
-    navigator.mediaDevices.getUserMedia({
-        audio: {
+
+    let state = STATE.GENERATING;
+    let stream = null;
+    let recorder = null;
+    let recordingToken = 0;
+    let recordStartedAt = 0;
+    let lastBlob = null;
+    let transcriptionFailed = false;
+    let audioPending = true; // true until the question has been played
+    let audioBroken = false;
+    let uploadInFlight = false;
+    let submitUrl = initialSubmitUrl;
+    let submitting = false;
+    let unloading = false;
+
+    function log(level, message, detail) {
+        const sink = console[level] || console.log;
+        if (detail === undefined) sink.call(console, LOG_PREFIX, message);
+        else sink.call(console, LOG_PREFIX, message, detail);
+    }
+
+    function show(message, type = "info") {
+        if (!els.notice) return;
+        els.notice.className = `alert alert-${type}`;
+        els.notice.textContent = message;
+    }
+
+    function guardLocked() {
+        return !!(guard && typeof guard.isLocked === "function" && guard.isLocked());
+    }
+
+    function transcriptState() {
+        const hasTranscript = !!(els.transcript.value && els.transcript.value.trim());
+        return hasDraft || hasTranscript ? STATE.REVIEW : STATE.READY;
+    }
+
+    function syncControls() {
+        const locked = guardLocked();
+        const busy = BUSY_STATES.has(state);
+        const recording = state === STATE.LISTENING;
+        const canRecord =
+            !locked &&
+            !busy &&
+            !recording &&
+            audioPending === false &&
+            (state === STATE.READY || state === STATE.REVIEW);
+
+        els.recordButton.disabled = !canRecord;
+        els.stopButton.disabled = locked || !recording;
+        els.submitButton.disabled = !(
+            !locked &&
+            state === STATE.REVIEW &&
+            els.confirmTranscript &&
+            els.confirmTranscript.checked &&
+            els.transcript.value.trim()
+        );
+
+        if (els.skipButton) {
+            els.skipButton.disabled = locked || busy || recording;
+        }
+        if (els.endButton) {
+            els.endButton.disabled = locked || busy || recording;
+        }
+        if (els.retryButton) {
+            const canRetry =
+                !locked &&
+                !busy &&
+                transcriptionFailed &&
+                (state === STATE.READY || state === STATE.REVIEW) &&
+                !!lastBlob;
+            els.retryButton.classList.toggle("d-none", !canRetry);
+            els.retryButton.disabled = !canRetry;
+        }
+
+        const hasText = !!els.transcript.value.trim() || hasDraft;
+        els.recordButton.textContent = hasText ? "Re-record answer" : "Start answer";
+    }
+
+    function setState(next, message, type = "info") {
+        if (state !== next) log("info", `state ${state} -> ${next}`);
+        state = next;
+        if (message) show(message, type);
+        syncControls();
+    }
+
+    /* ----------------------------------------------------------------- *
+     * Question audio (TTS): recording stays locked until it has played.
+     * ----------------------------------------------------------------- */
+
+    function setRepeatLabel(label) {
+        if (els.repeatButton) els.repeatButton.textContent = label;
+    }
+
+    function failQuestionAudio(message, detail) {
+        if (unloading) return;
+        audioPending = true;
+        audioBroken = true;
+        if (detail) log("error", "question audio unavailable", detail);
+        setState(STATE.SYNTHESIZING, message, "danger");
+        if (els.repeatButton) {
+            els.repeatButton.textContent = "Retry question audio";
+            els.repeatButton.disabled = false;
+        }
+        syncControls();
+    }
+
+    function finishQuestionPlayback(message, type = "info") {
+        if (unloading) return;
+        audioPending = false;
+        audioBroken = false;
+        setRepeatLabel("Repeat question");
+        if (guardLocked()) {
+            log("warn", "question audio finished while the focus guard is locked");
+            syncControls();
+            return;
+        }
+        if (BUSY_STATES.has(state) || state === STATE.LISTENING) {
+            // A late "ended" must not overwrite upload/transcription progress.
+            return;
+        }
+        setState(hasDraft ? STATE.REVIEW : STATE.READY, message, type);
+        els.recordButton.focus({ preventScroll: true });
+    }
+
+    function retryQuestionAudio() {
+        if (!els.audio) {
+            window.location.reload();
+            return;
+        }
+        audioBroken = false;
+        audioPending = true;
+        setRepeatLabel("Repeat question");
+        setState(STATE.SYNTHESIZING, "Regenerating the question audio...");
+        try {
+            const current = els.audio.getAttribute("src") || "";
+            const base = current.split("?")[0];
+            els.audio.src = `${base}?retry=${Date.now()}`;
+            els.audio.load();
+        } catch (error) {
+            log("error", "could not reset the question audio element", String(error));
+            failQuestionAudio(
+                "The question audio could not be reloaded. Reload the room and try again."
+            );
+            return;
+        }
+        playQuestion();
+    }
+
+    function playQuestion() {
+        if (!els.audio || unloading) return;
+        if (BUSY_STATES.has(state) || state === STATE.LISTENING) return;
+        try {
+            els.audio.currentTime = 0;
+        } catch (error) {
+            log("warn", "could not rewind the question audio", String(error));
+        }
+        let promise = null;
+        try {
+            promise = els.audio.play();
+        } catch (error) {
+            log("error", "question audio play() threw", String(error));
+        }
+        if (promise && typeof promise.catch === "function") {
+            promise.catch((error) => {
+                const name = error && error.name;
+                log("warn", "question audio playback was blocked", {
+                    name: name,
+                    message: error && error.message
+                });
+                if (name === "NotAllowedError") {
+                    audioPending = true;
+                    setState(
+                        STATE.SYNTHESIZING,
+                        "Autoplay was blocked. Press \"Repeat question\" to hear the question, then record your answer.",
+                        "warning"
+                    );
+                    return;
+                }
+                failQuestionAudio(
+                    "The question audio could not be played. Press \"Retry question audio\" or reload the room.",
+                    { name: name, message: error && error.message }
+                );
+            });
+        }
+    }
+
+    function initQuestionAudio() {
+        if (els.retryAudioButton) {
+            els.retryAudioButton.addEventListener("click", retryQuestionAudio);
+        }
+        if (!els.audio) {
+            log("error", "question audio was not generated by the server");
+            audioPending = !hasDraft;
+            if (hasDraft) {
+                setState(
+                    STATE.REVIEW,
+                    "The question audio is unavailable, but your recorded transcript is saved. Review it or re-record your answer.",
+                    "warning"
+                );
+            } else {
+                failQuestionAudio(
+                    "The question audio could not be generated. Press \"Retry question audio\" or reload the room."
+                );
+            }
+            return;
+        }
+
+        els.audio.addEventListener("loadedmetadata", () => {
+            log("info", "question audio metadata loaded", {
+                duration: Number.isFinite(els.audio.duration) ? els.audio.duration : null,
+                readyState: els.audio.readyState
+            });
+        });
+        els.audio.addEventListener("playing", () => {
+            if (BUSY_STATES.has(state) || state === STATE.LISTENING) return;
+            audioPending = true;
+            log("info", "question audio playing");
+            setState(
+                STATE.PLAYING,
+                "The question is playing. Recording unlocks when it finishes."
+            );
+        });
+        els.audio.addEventListener("ended", () => {
+            log("info", "question audio finished");
+            finishQuestionPlayback("The question has finished. Record your answer.");
+        });
+        els.audio.addEventListener("error", () => {
+            const mediaError = els.audio.error;
+            failQuestionAudio(
+                "The question audio could not be loaded. Press \"Retry question audio\" or reload the room.",
+                {
+                    code: mediaError ? mediaError.code : null,
+                    message: mediaError ? mediaError.message : ""
+                }
+            );
+        });
+
+        if (els.repeatButton) {
+            els.repeatButton.addEventListener("click", () => {
+                if (els.repeatButton.disabled) return;
+                if (state === STATE.LISTENING || BUSY_STATES.has(state)) {
+                    log("warn", "repeat ignored while the answer is being captured");
+                    return;
+                }
+                if (audioBroken) {
+                    retryQuestionAudio();
+                    return;
+                }
+                audioPending = true;
+                setState(STATE.SYNTHESIZING, "Replaying the question...");
+                playQuestion();
+            });
+        }
+
+        if (els.audio.error) {
+            failQuestionAudio(
+                "The question audio could not be loaded. Press \"Retry question audio\" or reload the room.",
+                { code: els.audio.error.code, message: els.audio.error.message }
+            );
+            return;
+        }
+
+        if (hasDraft) {
+            audioPending = false;
+            setRepeatLabel("Repeat question");
+            setState(
+                STATE.REVIEW,
+                "Review the transcript, or re-record your answer. The question can be replayed at any time."
+            );
+            return;
+        }
+
+        setState(STATE.SYNTHESIZING, "Preparing the interviewer's voice...");
+        playQuestion();
+    }
+
+    /* ----------------------------------------------------------------- *
+     * Microphone
+     * ----------------------------------------------------------------- */
+
+    function describeMediaError(error) {
+        const name = error && error.name;
+        if (name === "NotAllowedError" || name === "SecurityError") {
+            return "Microphone permission was denied. Allow microphone access in the browser, then try again.";
+        }
+        if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+            return "No microphone was detected. Connect a microphone, then try again.";
+        }
+        if (name === "NotReadableError" || name === "TrackStartError") {
+            return "The microphone is busy in another application. Close it, then try again.";
+        }
+        if (name === "OverconstrainedError") {
+            return "The microphone does not support the requested audio settings. Try another device.";
+        }
+        return (error && error.message) || "The microphone could not be started.";
+    }
+
+    function stopStream() {
+        if (!stream) return;
+        stream.getTracks().forEach((track) => {
+            try {
+                track.stop();
+            } catch (error) {
+                log("warn", "could not stop a media track", String(error));
+            }
+        });
+        stream = null;
+        if (els.video) els.video.srcObject = null;
+    }
+
+    function releaseRecorder() {
+        const active = recorder;
+        recorder = null;
+        if (active && active.state !== "inactive") {
+            try {
+                active.stop();
+            } catch (error) {
+                log("warn", "could not stop the recorder cleanly", String(error));
+            }
+        }
+    }
+
+    function releaseAll() {
+        unloading = true;
+        recordingToken += 1;
+        releaseRecorder();
+        stopStream();
+    }
+
+    async function ensureMediaStream() {
+        if (stream) {
+            const live = stream
+                .getAudioTracks()
+                .some((track) => track.readyState === "live");
+            if (live) return stream;
+            log("warn", "the microphone track ended; requesting a new stream");
+            stopStream();
+        }
+
+        const mediaDevices = navigator.mediaDevices;
+        if (!mediaDevices || typeof mediaDevices.getUserMedia !== "function") {
+            throw new Error(
+                "This browser cannot access the microphone. Use a recent Chrome, Edge or Firefox and open the site on 127.0.0.1 or HTTPS."
+            );
+        }
+        const audioConstraints = {
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
             channelCount: 1
-        },
-        video: true
-    }).then(media => {
-        stream = media; document.getElementById("studentVideo").srcObject = media;
-    }).catch(() => show("Microphone access is required to record an answer.", "danger"));
+        };
 
-    const audio = document.getElementById("questionAudio");
-    if (audio) {
-        const enableRecording = () => {
-            if (submitting) return;
-            recordButton.disabled = false;
-            show("The question has finished. You can record your answer.");
-        };
-        const disableRecording = () => {
-            if (submitting) return;
-            recordButton.disabled = true;
-            show("Listen to the complete question before recording.");
-        };
-        audio.addEventListener("play", disableRecording);
-        audio.addEventListener("pause", enableRecording);
-        audio.addEventListener("ended", enableRecording, {once: true});
-        audio.addEventListener("error", enableRecording, {once: true});
-        recordButton.disabled = !audio.paused;
-    }
-    document.getElementById("repeatButton").addEventListener("click", () => {
-        if (audio) {
-            recordButton.disabled = true;
-            audio.currentTime = 0;
-            audio.play();
-            audio.addEventListener("ended", enableRecording, {once: true});
-            audio.addEventListener("error", enableRecording, {once: true});
+        let media;
+        try {
+            media = await mediaDevices.getUserMedia({
+                audio: audioConstraints,
+                video: true
+            });
+            log("info", "microphone and camera stream captured");
+        } catch (error) {
+            // A missing or busy camera must never block the microphone: video is
+            // only a preview, the answer is audio.
+            log("warn", `camera + microphone request failed: ${error && error.name}: ${error && error.message}`);
+            media = await mediaDevices.getUserMedia({ audio: audioConstraints });
+            log("info", "microphone stream captured without a camera");
         }
-    });
-    recordButton.addEventListener("click", () => {
-        if (!stream) return show("Microphone is not ready.", "danger");
-        chunks = [];
-        transcript.value = "";
-        transcript.readOnly = true;
-        transcriptWarning.classList.add("d-none");
-        transcriptConfirmation.classList.add("d-none");
-        confirmTranscript.checked = false;
-        submitButton.disabled = true;
-        const audioOnlyStream = new MediaStream(stream.getAudioTracks());
-        const preferredTypes = [
-            "audio/webm;codecs=opus",
-            "audio/webm",
-            "audio/mp4"
-        ];
-        const mimeType = preferredTypes.find(type => MediaRecorder.isTypeSupported(type));
-        recorder = new MediaRecorder(
-            audioOnlyStream,
-            mimeType ? {mimeType, audioBitsPerSecond: 128000} : undefined
-        );
-        recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
-        recorder.onstop = async () => {
-            show("Uploading and transcribing locally. Please wait...");
-            const blob = new Blob(chunks, {type: recorder.mimeType || "audio/webm"});
-            const data = new FormData();
-            data.append("audio", blob, "answer.webm");
+
+        const audioTrack = media.getAudioTracks()[0];
+        if (!audioTrack) {
+            stopStream();
+            throw new Error("The browser did not provide a microphone track. Check the selected input device.");
+        }
+        const settings =
+            typeof audioTrack.getSettings === "function" ? audioTrack.getSettings() : {};
+        log("info", "microphone ready", {
+            label: audioTrack.label || "unknown device",
+            state: audioTrack.readyState,
+            sampleRate: settings.sampleRate || "browser default",
+            channelCount: settings.channelCount || "browser default"
+        });
+
+        stream = media;
+        if (els.video) {
+            els.video.srcObject = media;
+            const preview = els.video.play();
+            if (preview && typeof preview.catch === "function") preview.catch(() => {});
+        }
+        return stream;
+    }
+
+    function pickMimeType() {
+        if (typeof MediaRecorder === "undefined") return "";
+        for (const type of MIME_CANDIDATES) {
             try {
-                const response = await fetch(transcribeUrl, {method:"POST", headers:{"X-CSRFToken":csrf}, body:data});
-                const result = await response.json();
-                if (!response.ok) throw new Error(result.error || "Transcription failed.");
-                transcript.value = result.transcript;
-                transcript.readOnly = false;
-                submitUrl = result.submit_url;
-                confirmTranscript.checked = false;
-                transcriptConfirmation.classList.remove("d-none");
-                submitButton.disabled = true;
-                recordButton.disabled = false;
-                recordButton.textContent = "Re-record answer";
-                if (result.quality && result.quality.status === "needs_review") {
-                    transcriptWarning.classList.remove("d-none");
-                    transcriptWarning.textContent =
-                        `Transcription quality is unreliable: ${result.quality.issues.join(" ")} ` +
-                        "Please re-record in a quieter position or manually correct the transcript.";
-                    show("The automatic transcript needs careful review.", "warning");
-                } else {
-                    transcriptWarning.classList.add("d-none");
-                    show("Review every word and confirm the transcript before submission.", "success");
+                if (MediaRecorder.isTypeSupported(type)) return type;
+            } catch (error) {
+                /* keep probing */
+            }
+        }
+        return "";
+    }
+
+    /* ----------------------------------------------------------------- *
+     * Recording
+     * ----------------------------------------------------------------- */
+
+    async function startRecording() {
+        if (state === STATE.LISTENING) return; // duplicate click
+        if (BUSY_STATES.has(state) || submitting) {
+            log("warn", "record ignored while a previous answer is still being processed");
+            return;
+        }
+        if (audioPending) {
+            show("Listen to the complete question before recording.", "warning");
+            return;
+        }
+        if (typeof MediaRecorder === "undefined") {
+            show("This browser cannot record audio (MediaRecorder is unavailable). Use a recent Chrome, Edge or Firefox.", "danger");
+            return;
+        }
+
+        // Immediate feedback and a synchronous guard against double clicks.
+        els.recordButton.disabled = true;
+
+        try {
+            const media = await ensureMediaStream();
+            // Pull a fresh audio-only stream per recording: reusing a MediaStream
+            // after a recorder has been stopped is unreliable across browsers.
+            const audioStream =
+                typeof MediaStream === "function"
+                    ? new MediaStream(media.getAudioTracks())
+                    : media;
+            const mimeType = pickMimeType();
+            const options = mimeType
+                ? { mimeType, audioBitsPerSecond: 128000 }
+                : undefined;
+
+            lastBlob = null;
+            transcriptionFailed = false;
+            const token = ++recordingToken;
+            const rec = new MediaRecorder(audioStream, options);
+            recorder = rec;
+            // Keep the chunks in this recorder's closure: a stale recorder can
+            // never contribute audio to the next answer.
+            const capturedChunks = [];
+
+            rec.ondataavailable = (event) => {
+                if (event && event.data && event.data.size > 0) {
+                    capturedChunks.push(event.data);
                 }
-            } catch (error) { show(error.message, "danger"); recordButton.disabled = false; }
-        };
-        recorder.start(1000);
-        recordButton.disabled = true; stopButton.disabled = false;
-        show("Recording your answer...", "danger");
-    });
-    transcript.addEventListener("input", () => {
-        confirmTranscript.checked = false;
-        submitButton.disabled = true;
-    });
-    confirmTranscript.addEventListener("change", () => {
-        submitButton.disabled = !confirmTranscript.checked || !transcript.value.trim();
-    });
-    stopButton.addEventListener("click", () => {
-        if (recorder && recorder.state !== "inactive") recorder.stop();
-        stopButton.disabled = true;
-    });
+            };
+            rec.onerror = (event) => {
+                const error = (event && event.error) || event;
+                log("error", "MediaRecorder error", {
+                    name: error && error.name,
+                    message: error && error.message
+                });
+                if (recorder === rec) recorder = null;
+                if (token === recordingToken && !unloading) {
+                    setState(
+                        transcriptState(),
+                        "Recording failed. Check your microphone, then try again.",
+                        "danger"
+                    );
+                }
+            };
+            rec.onstop = () => {
+                const stoppedFor = token;
+                const blob = new Blob(capturedChunks, {
+                    type: rec.mimeType || mimeType || "audio/webm"
+                });
+                if (recorder === rec) recorder = null;
+                if (unloading) {
+                    log("info", "page is unloading; captured audio is discarded");
+                    return;
+                }
+                if (stoppedFor !== recordingToken) {
+                    log("warn", "ignoring a stale recorder result");
+                    return;
+                }
+                const seconds = Math.max(
+                    0,
+                    Math.round((Date.now() - recordStartedAt) / 1000)
+                );
+                if (!blob.size) {
+                    log("warn", "recorder produced no audio", { seconds });
+                    setState(
+                        transcriptState(),
+                        "No audio was captured. Check that the microphone is not muted, then record again.",
+                        "danger"
+                    );
+                    return;
+                }
+                lastBlob = blob;
+                log("info", "answer recorded", {
+                    bytes: blob.size,
+                    seconds,
+                    mimeType: blob.type
+                });
+                uploadAnswer(blob, stoppedFor);
+            };
+
+            recordStartedAt = Date.now();
+            rec.start(1000);
+            log("info", "recording started", {
+                mimeType: mimeType || "browser default",
+                audioTracks: audioStream.getAudioTracks().length
+            });
+            setState(
+                STATE.LISTENING,
+                "Recording your answer. Click \"Stop and transcribe\" when you finish.",
+                "danger"
+            );
+            els.stopButton.focus({ preventScroll: true });
+        } catch (error) {
+            log("error", "could not start recording", {
+                name: error && error.name,
+                message: error && error.message
+            });
+            setState(transcriptState(), describeMediaError(error), "danger");
+        }
+    }
+
+    function stopRecording() {
+        if (state !== STATE.LISTENING || !recorder) {
+            log("warn", "stop ignored: no active recording");
+            return;
+        }
+        els.stopButton.disabled = true;
+        setState(STATE.TRANSCRIBING, "Saving your recording...");
+        const active = recorder;
+        try {
+            active.stop();
+        } catch (error) {
+            log("error", "could not stop the recorder", String(error));
+            recorder = null;
+            setState(transcriptState(), "The recording could not be stopped cleanly. Please record again.", "danger");
+        }
+    }
+
+    /* ----------------------------------------------------------------- *
+     * Upload + STT
+     * ----------------------------------------------------------------- */
+
+    async function readJsonBody(response) {
+        let text = "";
+        try {
+            text = await response.text();
+        } catch (error) {
+            throw new Error(`The server response could not be read (HTTP ${response.status}).`);
+        }
+        if (!text) return {};
+        try {
+            return JSON.parse(text);
+        } catch (error) {
+            const preview = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+            throw new Error(
+                `The server returned an unexpected response (HTTP ${response.status}). ${preview}`
+            );
+        }
+    }
+
+    function applyTranscript(result) {
+        els.transcript.value = result.transcript;
+        els.transcript.readOnly = false;
+        if (result.submit_url) submitUrl = result.submit_url;
+        if (els.confirmTranscript) els.confirmTranscript.checked = false;
+        if (els.confirmation) els.confirmation.classList.remove("d-none");
+
+        const quality = result.quality || {};
+        const issues = Array.isArray(quality.issues) ? quality.issues : [];
+        if (quality.status === "needs_review") {
+            if (els.transcriptWarning) {
+                els.transcriptWarning.textContent =
+                    `Transcription quality is unreliable: ${issues.join(" ")} ` +
+                    "Please re-record in a quieter position or correct the transcript.";
+                els.transcriptWarning.classList.remove("d-none");
+            }
+            setState(
+                STATE.REVIEW,
+                "The automatic transcript needs careful review before you submit.",
+                "warning"
+            );
+        } else {
+            if (els.transcriptWarning) els.transcriptWarning.classList.add("d-none");
+            setState(
+                STATE.REVIEW,
+                "Review every word, tick the confirmation box, then submit.",
+                "success"
+            );
+        }
+    }
+
+    async function uploadAnswer(blob, token) {
+        if (token !== undefined && token !== recordingToken) return;
+        if (uploadInFlight) {
+            log("warn", "upload ignored: another transcription request is already in flight");
+            return;
+        }
+        if (!blob || !blob.size) {
+            setState(transcriptState(), "There is no recording to transcribe. Record your answer first.", "warning");
+            return;
+        }
+
+        uploadInFlight = true;
+        setState(STATE.TRANSCRIBING, "Transcribing your answer locally. Please wait...");
+        const controller = typeof AbortController === "function" ? new AbortController() : null;
+        const timeout = controller
+            ? window.setTimeout(() => controller.abort(), TRANSCRIBE_TIMEOUT_MS)
+            : null;
+        const startedAt = Date.now();
+
+        try {
+            const form = new FormData();
+            form.append("audio", blob, "answer.webm");
+            const response = await fetch(transcribeUrl, {
+                method: "POST",
+                headers: { "X-CSRFToken": csrf },
+                body: form,
+                credentials: "same-origin",
+                signal: controller ? controller.signal : undefined
+            });
+            const result = await readJsonBody(response);
+            if (!response.ok) {
+                const failure = new Error(
+                    result.error || `Transcription failed (HTTP ${response.status}).`
+                );
+                failure.status = response.status;
+                failure.code = result.code;
+                throw failure;
+            }
+            if (typeof result.transcript !== "string" || !result.submit_url) {
+                throw new Error("The transcription response was incomplete. Please retry.");
+            }
+            log("info", "transcription received", {
+                elapsedMs: Date.now() - startedAt,
+                characters: result.transcript.length,
+                language: result.detected_language,
+                confidence: result.confidence,
+                quality: result.quality && result.quality.status
+            });
+            transcriptionFailed = false;
+            applyTranscript(result);
+        } catch (error) {
+            const timedOut = error && error.name === "AbortError";
+            const message = timedOut
+                ? "Transcription timed out. The speech model may still be loading."
+                : (error && error.message) || "Transcription failed.";
+            log("error", "transcription failed", {
+                message,
+                status: error && error.status,
+                code: error && error.code,
+                elapsedMs: Date.now() - startedAt
+            });
+            if (error && error.status === 409) {
+                // The server has already moved past this question (another tab,
+                // a lost response). Retrying cannot succeed; reload the room.
+                show(`${message} Reloading the interview room...`, "warning");
+                window.setTimeout(() => window.location.reload(), 1200);
+                return;
+            }
+            transcriptionFailed = true;
+            setState(
+                transcriptState(),
+                `${message} Your recording was kept — press "Retry transcription" or re-record.`,
+                "danger"
+            );
+        } finally {
+            uploadInFlight = false;
+            if (timeout) window.clearTimeout(timeout);
+        }
+    }
+
+    /* ----------------------------------------------------------------- *
+     * Review + submit
+     * ----------------------------------------------------------------- */
 
     async function submitAnswer() {
-        if (submitting || !submitUrl) return;
+        if (submitting) return;
+        if (!submitUrl) {
+            show("Record and transcribe an answer before submitting.", "warning");
+            return;
+        }
+        if (state !== STATE.REVIEW) {
+            show("Wait for the transcription to finish before submitting.", "warning");
+            return;
+        }
+        if (!els.transcript.value.trim()) {
+            show("The transcript is empty. Record your answer or type what you said.", "warning");
+            return;
+        }
+        if (!els.confirmTranscript || !els.confirmTranscript.checked) {
+            show("Tick the confirmation box to confirm the transcript matches your answer.", "warning");
+            return;
+        }
+
         submitting = true;
-        submitButton.disabled = true;
-        show("Submitting your answer...");
+        setState(STATE.PROCESSING, "Submitting your answer...");
         try {
             const response = await fetch(submitUrl, {
-                method:"POST", headers:{"X-CSRFToken":csrf, "Content-Type":"application/json"},
-                body:JSON.stringify({
-                    transcript: transcript.value,
-                    transcript_confirmed: confirmTranscript.checked
+                method: "POST",
+                headers: { "X-CSRFToken": csrf, "Content-Type": "application/json" },
+                credentials: "same-origin",
+                body: JSON.stringify({
+                    transcript: els.transcript.value,
+                    transcript_confirmed: els.confirmTranscript.checked
                 })
             });
-            const result = await response.json();
+            const result = await readJsonBody(response);
             if (!response.ok) {
-                // A 409 means the server has already accepted the answer (e.g. a
-                // retry after a lost response). Reloading lets the room pick up the
-                // next question, or forwards to processing when the interview ended.
+                // 409 means the server already accepted this answer (e.g. the
+                // response was lost). Reloading picks up the next question.
                 if (response.status === 409) {
-                    if (guard) guard.suppress();
+                    log("warn", "answer was already accepted; reloading the room");
+                    if (guard && guard.suppress) guard.suppress();
                     window.location.reload();
                     return;
                 }
-                throw new Error(result.error || "Submission failed.");
+                throw new Error(result.error || `Submission failed (HTTP ${response.status}).`);
             }
-            cleanup();
-            if (guard) guard.suppress();
+            log("info", "answer accepted", { nextUrl: result.next_url });
+            if (!result.next_url) {
+                throw new Error("The server did not return the next interview step. Reload the room.");
+            }
+            if (guard && guard.suppress) guard.suppress();
+            releaseAll();
+            setState(
+                STATE.NEXT,
+                isFinalQuestion
+                    ? "Answer submitted. Preparing your interview report..."
+                    : "Answer submitted. Loading the next question..."
+            );
             window.location.href = result.next_url;
         } catch (error) {
             submitting = false;
-            submitButton.disabled = false;
-            show(error.message, "danger");
+            log("error", "answer submission failed", {
+                message: error && error.message
+            });
+            setState(
+                STATE.REVIEW,
+                (error && error.message) || "Submission failed. Please try again.",
+                "danger"
+            );
         }
     }
 
-    submitButton.addEventListener("click", submitAnswer);
-    document.getElementById("skipButton").addEventListener("click", async () => {
-        if (!confirm("Skip this question?")) return;
-        const response = await fetch(skipUrl, {method:"POST", headers:{"X-CSRFToken":csrf}});
-        const result = await response.json();
-        if (response.ok) { if (guard) guard.suppress(); cleanup(); window.location.href = result.next_url; }
-        else show(result.error || "Could not skip.", "danger");
+    async function postAndLeave(url, failureMessage) {
+        if (BUSY_STATES.has(state)) {
+            log("warn", "action ignored while an answer is being processed");
+            return;
+        }
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "X-CSRFToken": csrf },
+                credentials: "same-origin"
+            });
+            const result = await readJsonBody(response);
+            if (!response.ok) {
+                throw new Error(result.error || failureMessage);
+            }
+            if (!result.next_url) {
+                throw new Error("The server did not return the next interview step.");
+            }
+            if (guard && guard.suppress) guard.suppress();
+            releaseAll();
+            window.location.href = result.next_url;
+        } catch (error) {
+            log("error", "interview action failed", {
+                url,
+                message: error && error.message
+            });
+            show((error && error.message) || failureMessage, "danger");
+        }
+    }
+
+    /* ----------------------------------------------------------------- *
+     * Wiring
+     * ----------------------------------------------------------------- */
+
+    els.recordButton.addEventListener("click", startRecording);
+    els.stopButton.addEventListener("click", stopRecording);
+    if (els.retryButton) {
+        els.retryButton.addEventListener("click", () => {
+            if (!lastBlob) {
+                show("There is no saved recording to retry. Record your answer again.", "warning");
+                return;
+            }
+            uploadAnswer(lastBlob, recordingToken);
+        });
+    }
+    els.transcript.addEventListener("input", () => {
+        if (els.confirmTranscript) els.confirmTranscript.checked = false;
+        syncControls();
     });
-    document.getElementById("endButton").addEventListener("click", async () => {
-        if (!confirm("End the interview and generate the report from submitted answers?")) return;
-        const response = await fetch(endUrl, {method:"POST", headers:{"X-CSRFToken":csrf}});
-        const result = await response.json();
-        if (response.ok) { if (guard) guard.suppress(); cleanup(); window.location.href = result.next_url; }
-        else show(result.error || "At least one evaluated answer is required.", "danger");
-    });
+    if (els.confirmTranscript) {
+        els.confirmTranscript.addEventListener("change", syncControls);
+    }
+    els.submitButton.addEventListener("click", submitAnswer);
+    if (els.skipButton) {
+        els.skipButton.addEventListener("click", () => {
+            if (!window.confirm("Skip this question?")) return;
+            postAndLeave(skipUrl, "Could not skip this question.");
+        });
+    }
+    if (els.endButton) {
+        els.endButton.addEventListener("click", () => {
+            if (!window.confirm("End the interview and generate the report from submitted answers?")) return;
+            postAndLeave(endUrl, "At least one evaluated answer is required.");
+        });
+    }
+
     let remaining = Number("{{ session.duration_minutes|default:0 }}") * 60;
-    setInterval(() => {
-        remaining = Math.max(0, remaining - 1);
-        document.getElementById("timer").textContent =
-            `${String(Math.floor(remaining/60)).padStart(2,"0")}:${String(remaining%60).padStart(2,"0")}`;
-    }, 1000);
-    window.addEventListener("beforeunload", cleanup);
+    if (els.timer) {
+        window.setInterval(() => {
+            remaining = Math.max(0, remaining - 1);
+            els.timer.textContent = `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
+        }, 1000);
+    }
+
+    window.addEventListener("beforeunload", releaseAll);
+    window.addEventListener("pagehide", releaseAll);
+    window.addEventListener("pageshow", () => {
+        // Back/forward cache restore: the tracks were released on pagehide, so
+        // let the room capture a fresh stream instead of staying inert.
+        unloading = false;
+        if (state === STATE.LISTENING) {
+            setState(
+                transcriptState(),
+                "Recording was interrupted when the page was hidden. Record your answer again.",
+                "warning"
+            );
+        }
+    });
+
+    // Debug/inspection handle used by the browser console and the JS harness.
+    window.MockInterviewRoomVoice = {
+        getState: () => state,
+        isRecording: () => state === STATE.LISTENING,
+        hasRecording: () => !!lastBlob
+    };
+
+    log("info", "voice loop ready", {
+        audio: !!els.audio,
+        draft: hasDraft,
+        finalQuestion: isFinalQuestion
+    });
+    initQuestionAudio();
 })();
 </script>
 {% endblock %}

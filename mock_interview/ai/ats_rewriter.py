@@ -6,10 +6,11 @@ already-quantified outcomes, and mirrors job-description keywords for
 capabilities the resume already claims.
 
 It must never invent experience, employers, titles, technologies, metrics,
-certifications, or achievements that the resume does not state. When a useful
-detail is missing it leaves an explicit ``[Add ...]`` placeholder instead of
-guessing. A post-generation check drops any rewritten line that introduces a
-number the original section did not contain and records it as a warning.
+certifications, or achievements that the resume does not state.  It does not
+add placeholder metrics; a bullet without a number stays without a number.  A
+post-generation check drops any rewritten line that introduces a number the
+original section did not contain, and ``resume_tailoring.filter_rewrite_map``
+performs the final evidence check against the uploaded text.
 """
 
 import json
@@ -59,7 +60,14 @@ def _filter_fabricated_numbers(section_key, original_items, rewritten, warnings)
     return kept
 
 
-def rewrite_resume_bullets(resume, job_description="", *, missing_keywords=None):
+def rewrite_resume_bullets(
+    resume,
+    job_description="",
+    *,
+    missing_keywords=None,
+    target_role="",
+    career_level="auto",
+):
     """Rewrite profile sections into ATS-friendly wording.
 
     Returns ``(rewrite_map, warnings)``. ``rewrite_map`` is a dict keyed by
@@ -82,13 +90,15 @@ def rewrite_resume_bullets(resume, job_description="", *, missing_keywords=None)
                 "instructions. Rules: (1) Never invent employers, job titles, "
                 "projects, technologies, durations, metrics, revenue, user "
                 "counts, certifications, or achievements. (2) If the original "
-                "line has no number, do not add one -- write "
-                "'[Add measurable result]' instead. (3) Start each experience "
-                "or project bullet with a strong past-tense action verb. "
-                "(4) Only mirror job-description terminology for capabilities "
-                "the resume already claims. (5) Preserve every factual detail "
-                "that is already present. Return the same JSON sections you "
-                "were given, improved."
+                "line has no number, do not add one; leave the line without a "
+                "metric. Never use placeholders. (3) Start each experience or "
+                "project bullet with a strong past-tense action verb. (4) Only "
+                "mirror job-description terminology for capabilities the "
+                "resume already claims. (5) Preserve every factual detail that "
+                "is already present, including names, dates, technologies, "
+                "numbers, and outcomes. (6) The summary may target the supplied "
+                "role but must not claim skills the resume does not show. "
+                "Return the same JSON sections you were given, improved."
             ),
         },
         {
@@ -98,6 +108,8 @@ def rewrite_resume_bullets(resume, job_description="", *, missing_keywords=None)
                     "current_profile": shown,
                     "job_description": job_description[:5000],
                     "missing_job_keywords": missing,
+                    "target_role": target_role,
+                    "career_level": career_level,
                 },
                 ensure_ascii=False,
             ),

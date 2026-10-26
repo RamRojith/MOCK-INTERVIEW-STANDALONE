@@ -1,13 +1,18 @@
-"""Orchestrates an ATS resume check: analyze -> generate faithful files."""
+"""Orchestrates an ATS resume check: analyze -> tailor -> generate files."""
 import logging
 from decimal import Decimal
 
 from django.db import transaction
 
+from mock_interview.ai import ats_rewriter
 from mock_interview.services.ats import analyze_resume
 from mock_interview.services.resume_generator import (
     ResumeGenerationError,
     generate_resume_files,
+)
+from mock_interview.services.resume_tailoring import (
+    detect_career_level,
+    infer_target_role,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,6 +34,8 @@ _PERSISTED_FIELDS = (
     "rewrite_warnings",
     "rewrite_source",
     "rules_version",
+    "target_role",
+    "career_level",
 )
 
 
@@ -36,10 +43,10 @@ _PERSISTED_FIELDS = (
 def run_ats_check(ats_check):
     """Analyze a source resume and persist the ATSResumeCheck result.
 
-    The score and issues are deterministic (services/ats.py). The generated
-    DOCX/PDF is always a faithful, deterministic rebuild of the uploaded
-    resume (resume_generator.build_sections), so the student's details stay
-    exactly as they wrote them.
+    The score and issues are deterministic (services/ats.py).  The generated
+    DOCX/PDF starts from the uploaded resume's own evidence and follows the
+    reference ATS hierarchy.  An optional local-LLM wording pass is accepted
+    only if it passes the evidence guard; it can never change the score.
     """
     resume = ats_check.source_resume
     analysis = analyze_resume(resume, ats_check.job_description)
@@ -57,14 +64,46 @@ def run_ats_check(ats_check):
     ats_check.action_verb_analysis = analysis["action_verb_analysis"]
     ats_check.rules_version = analysis["rules_version"]
 
-    # The downloadable ATS resume is always a faithful, deterministic rebuild
-    # of the uploaded resume. LLM bullet rewriting is deliberately never
-    # applied to the download, so every detail stays exactly as the student
-    # wrote it. The analysis/score above is unchanged by this choice.
-    ats_check.rewrite_warnings = []
+    target_role = infer_target_role(
+        ats_check.job_description,
+        ats_check.target_role,
+        resume.extracted_text,
+    )
+    career_level = detect_career_level(resume, ats_check.career_level)
+    ats_check.target_role = target_role or ats_check.target_role
+    if (
+        ats_check.career_level == "auto"
+        and career_level in {"fresher", "intern", "experienced"}
+    ):
+        ats_check.career_level = career_level
+    try:
+        rewrite_map, rewrite_warnings = ats_rewriter.rewrite_resume_bullets(
+            resume,
+            ats_check.job_description,
+            missing_keywords=analysis["missing_keywords"],
+            target_role=target_role,
+            career_level=career_level,
+        )
+    except Exception:
+        logger.exception("Optional ATS wording pass failed for %s", ats_check.public_id)
+        rewrite_map = None
+        rewrite_warnings = [
+            "The optional wording pass was unavailable; the resume kept the "
+            "uploaded wording."
+        ]
+
+    ats_check.rewrite_warnings = list(rewrite_warnings or [])
     ats_check.rewrite_source = "deterministic"
     try:
-        generate_resume_files(ats_check)
+        generate_resume_files(
+            ats_check,
+            rewrite_map=rewrite_map,
+            warnings=ats_check.rewrite_warnings,
+            target_role=target_role,
+            career_level=career_level,
+            job_description=ats_check.job_description,
+            matched_keywords=analysis["matched_keywords"],
+        )
     except ResumeGenerationError as exc:
         ats_check.status = "failed"
         ats_check.error_message = str(exc)[:500]

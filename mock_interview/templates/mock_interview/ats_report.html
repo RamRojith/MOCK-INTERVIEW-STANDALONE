@@ -26,7 +26,13 @@
 
 <div class="text-center mb-4">
   <h3 class="fw-bold"><i class="fas fa-file-check me-2"></i>ATS Resume Report</h3>
-  <p class="text-muted">{{ check.source_resume.original_filename }}</p>
+  <p class="text-muted mb-1">{{ check.source_resume.original_filename }}</p>
+  {% if check.target_role %}
+    <span class="badge bg-primary-subtle text-primary-emphasis">Target role: {{ check.target_role }}</span>
+  {% elif check.job_description %}
+    <span class="badge bg-primary-subtle text-primary-emphasis">Target role derived from the job description</span>
+  {% endif %}
+  <span class="badge bg-secondary-subtle text-secondary-emphasis">{{ check.get_career_level_display }}</span>
 </div>
 
 {% if check.status == "failed" %}
@@ -166,8 +172,22 @@
   <div class="content-card ats-wrap mb-4">
     <h5 class="fw-bold mb-3"><i class="fas fa-download me-2"></i>Download your ATS-friendly resume</h5>
     <p class="text-muted">
-      Single-column, machine-readable layout with standard section order. Your own
-      wording is preserved &mdash; missing details are left as <code>[Add ...]</code> placeholders, never invented.
+      Single-column, machine-readable layout with labelled skill groups and the
+      reference section order: objective, education, skills, real-time projects,
+      certifications, internships &amp; experience, academic projects, and achievements.
+      Unlabelled project sections use a plain PROJECTS heading. Resume facts come
+      only from your upload &mdash; missing details are omitted or flagged, never
+      invented. The target role guides the objective and, when enabled, the
+      fact-checked wording pass. The ATS score still describes your uploaded source
+      resume; it is not a guarantee of any employer's result.
+    </p>
+    <p class="small text-muted">
+      Wording source:
+      {% if check.rewrite_source == "llm" %}
+        <span class="badge bg-success-subtle text-success-emphasis">fact-checked wording pass</span>
+      {% else %}
+        <span class="badge bg-secondary-subtle text-secondary-emphasis">deterministic layout; bullet wording kept from the upload</span>
+      {% endif %}
     </p>
     {% if check.rewrite_warnings %}
     <div class="alert alert-warning small">

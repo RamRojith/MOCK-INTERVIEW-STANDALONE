@@ -22,3 +22,9 @@ MOCK_INTERVIEW["FAST_INTERVIEW_PIPELINE"] = False
 MOCK_INTERVIEW["LATENCY_LOG"] = False
 MOCK_INTERVIEW["INTERVIEW_WORKER_AUTO_START"] = False
 MOCK_INTERVIEW["TTS_CACHE_ENABLED"] = False
+# Tests must never load the real Whisper model, even on a machine where
+# Faster-Whisper is installed. Individual tests opt in by overriding this.
+MOCK_INTERVIEW["DUMMY_STT"] = True
+# Likewise, tests must not load the Kokoro model. Real-TTS status tests patch
+# the synthesis function and opt in explicitly.
+MOCK_INTERVIEW["DUMMY_TTS"] = True

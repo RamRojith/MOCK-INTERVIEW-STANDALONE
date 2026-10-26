@@ -35,7 +35,11 @@ from mock_interview.services import interview_service
 from mock_interview.services.evaluator import RAGEvaluator
 from mock_interview.services.interview_planner import fast_pipeline_enabled
 from mock_interview.services.telemetry import record_latency, timed_latency
-from mock_interview.speech.tts import TextToSpeechError, synthesize_question
+from mock_interview.speech.tts import (
+    TextToSpeechError,
+    synthesize_question,
+    warm_up_tts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -334,6 +338,10 @@ def process_pending_tasks_once(
 
 def worker_loop(interval=None, stop_event=None, *, evaluations=8, prewarm=6):
     interval = interval or float(_cfg("INTERVIEW_WORKER_INTERVAL", 2.0))
+    # Load and exercise the TTS engine before the first student question. The
+    # first Kokoro inference includes a one-time graph/phonemizer warm-up that
+    # is far more expensive than steady-state synthesis.
+    warm_up_tts()
     while stop_event is None or not stop_event.is_set():
         started = time.perf_counter()
         try:

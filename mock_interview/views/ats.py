@@ -1,10 +1,9 @@
 """Standalone ATS resume checker: upload, analyze, and download the rewrite."""
 
-from django.conf import settings
 from django.http import FileResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET
 
 from mock_interview.models import ATSResumeCheck, ResumeDocument
 from mock_interview.services.access import (
@@ -33,6 +32,27 @@ def _bounded_job_description(value):
     return (value or "").strip()[:8000]
 
 
+def _bounded_target_role(value):
+    return (value or "").strip().replace("\r", " ").replace("\n", " ")[:200]
+
+
+def _valid_career_level(value):
+    value = (value or "auto").strip().lower()
+    if value not in {"auto", "fresher", "intern", "experienced"}:
+        return "auto"
+    return value
+
+
+def _form_values(request):
+    return {
+        "target_role": _bounded_target_role(request.POST.get("target_role")),
+        "career_level": _valid_career_level(request.POST.get("career_level")),
+        "job_description": _bounded_job_description(
+            request.POST.get("job_description")
+        ),
+    }
+
+
 @student_required
 def ats_checker(request):
     """Landing page for the ATS Resume Checker (GET) and upload entry (POST)."""
@@ -43,7 +63,10 @@ def ats_checker(request):
             return render(
                 request,
                 "mock_interview/ats_checker.html",
-                {"error": "Choose a PDF or DOCX resume to check."},
+                {
+                    "error": "Choose a PDF or DOCX resume to check.",
+                    **_form_values(request),
+                },
                 status=400,
             )
         try:
@@ -65,7 +88,7 @@ def ats_checker(request):
             return render(
                 request,
                 "mock_interview/ats_checker.html",
-                {"error": str(exc)},
+                {"error": str(exc), **_form_values(request)},
                 status=400,
             )
         try:
@@ -80,6 +103,8 @@ def ats_checker(request):
             job_description=_bounded_job_description(
                 request.POST.get("job_description")
             ),
+            target_role=_bounded_target_role(request.POST.get("target_role")),
+            career_level=_valid_career_level(request.POST.get("career_level")),
         )
         try:
             run_ats_check(ats_check)
@@ -90,7 +115,10 @@ def ats_checker(request):
             return render(
                 request,
                 "mock_interview/ats_checker.html",
-                {"error": f"Analysis failed. Please try again. Detail: {exc}"},
+                {
+                    "error": f"Analysis failed. Please try again. Detail: {exc}",
+                    **_form_values(request),
+                },
                 status=500,
             )
         return redirect("mock_interview:ats_report", public_id=ats_check.public_id)
@@ -127,6 +155,9 @@ def ats_check_detail(request, public_id):
             "score": float(check.score),
             "score_label": check.score_label,
             "analysis_mode": check.analysis_mode,
+            "target_role": check.target_role,
+            "career_level": check.career_level,
+            "career_level_display": check.get_career_level_display(),
             "dimension_scores": check.dimension_scores,
             "issues": check.issues,
             "matched_keywords": check.matched_keywords,
@@ -168,7 +199,10 @@ def _download(request, public_id, field, content_type, extension):
             {"ok": False, "error": f"{extension.upper()} resume unavailable."},
             status=404,
         )
-    name = f"ats_resume_{check.public_id.hex[:8]}.{extension}"
+    # Preserve the candidate's name in the download where one was detected.
+    name = str(stored.name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    if not name:
+        name = f"ats_resume_{check.public_id.hex[:8]}.{extension}"
     return FileResponse(
         stored.open("rb"),
         content_type=content_type,

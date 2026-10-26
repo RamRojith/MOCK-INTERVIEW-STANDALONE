@@ -198,8 +198,12 @@ def start_interview(session):
     session.started_at = session.started_at or timezone.now()
     session.save(update_fields=("status", "started_at", "updated_at"))
     logger.info(
-        "Interview %s started for student %s: %s",
-        session.public_id, session.student_employee_id, session.role,
+        "Interview %s started for student %s: %s (round=%s, questions=%s)",
+        session.public_id,
+        session.student_employee_id,
+        session.role,
+        session.interview_round,
+        session.question_count,
     )
     return session
 
@@ -227,24 +231,85 @@ def save_and_transcribe_answer(question, uploaded_audio):
     if AnswerEvaluation.objects.filter(answer__question=question).exists():
         raise InterviewStateError("This answer has already been submitted.")
     _validate_answer_audio(uploaded_audio)
+
+    uploaded_audio.seek(0)
     digest = hashlib.sha256()
     for chunk in uploaded_audio.chunks():
         digest.update(chunk)
     uploaded_audio.seek(0)
+    sha256 = digest.hexdigest()
 
-    answer, _ = StudentAnswer.objects.update_or_create(
-        question=question,
-        defaults={
-            "audio_file": uploaded_audio,
-            "audio_sha256": digest.hexdigest(),
-        },
+    # A browser retry (or a double-clicked "Stop and transcribe") uploads the
+    # same bytes again. Reuse the finished transcription instead of paying for a
+    # second model inference, and never clobber a student's edited transcript.
+    existing = StudentAnswer.objects.filter(question=question).first()
+    if (
+        existing is not None
+        and existing.transcribed_at
+        and existing.original_transcript
+        and existing.audio_sha256 == sha256
+    ):
+        logger.info(
+            "STT retry for answer %s on Q%s (session %s) reused the existing "
+            "transcript for identical audio sha256=%s",
+            existing.public_id,
+            question.sequence_number,
+            question.session_id,
+            sha256[:12],
+        )
+        return existing
+
+    logger.info(
+        "STT upload accepted: session=%s question=Q%s bytes=%s content_type=%s "
+        "sha256=%s",
+        question.session.public_id,
+        question.sequence_number,
+        getattr(uploaded_audio, "size", "unknown"),
+        getattr(uploaded_audio, "content_type", "unknown"),
+        sha256[:12],
     )
+
+    # Serialise concurrent uploads for the same question (duplicate tabs, a
+    # retried request) on the answer row itself.
+    try:
+        with transaction.atomic():
+            answer, _ = StudentAnswer.objects.select_for_update().get_or_create(
+                question=question
+            )
+            previous_sha = answer.audio_sha256
+            answer.audio_file = uploaded_audio
+            answer.audio_sha256 = sha256
+            if answer.transcribed_at and previous_sha and previous_sha != sha256:
+                # New recording: the previous transcript no longer describes it.
+                answer.original_transcript = ""
+                answer.corrected_transcript = ""
+                answer.transcribed_at = None
+            answer.save()
+    except Exception:
+        logger.exception(
+            "Could not persist answer audio for Q%s (session %s)",
+            question.sequence_number,
+            question.session.public_id,
+        )
+        raise
+
     answer.audio_file.open("rb")
     try:
         result = transcribe_audio(
             answer.audio_file,
             language_mode=question.session.language_mode,
         )
+    except Exception:
+        logger.exception(
+            "STT failed for answer %s (Q%s, session %s, bytes=%s, content_type=%s). "
+            "The audio is kept so the student can retry.",
+            answer.public_id,
+            question.sequence_number,
+            question.session.public_id,
+            getattr(uploaded_audio, "size", "unknown"),
+            getattr(uploaded_audio, "content_type", "unknown"),
+        )
+        raise
     finally:
         answer.audio_file.close()
     answer.original_transcript = result["transcript"]
@@ -265,13 +330,17 @@ def save_and_transcribe_answer(question, uploaded_audio):
     answer.transcribed_at = timezone.now()
     answer.save()
     logger.info(
-        "Answer %s transcribed for question Q%s in session %s: %d chars, lang=%s, conf=%.2f",
+        "Answer %s transcribed for question Q%s in session %s: %d chars, %.1fs "
+        "audio, lang=%s, conf=%.2f, quality=%s, model=%s",
         answer.public_id,
         question.sequence_number,
         question.session.public_id,
         len(result["transcript"]),
+        result["duration_seconds"],
         result["detected_language"],
         result["confidence"] or 0,
+        answer.speech_metrics["transcript_quality"].get("status"),
+        result.get("model_name", ""),
     )
     return answer
 

@@ -102,13 +102,20 @@ class ATSResumeCheckAdmin(admin.ModelAdmin):
         "student_employee_id",
         "student_name",
         "source_resume",
+        "target_role",
+        "career_level",
         "score",
         "rewrite_source",
         "status",
         "created_at",
     )
-    list_filter = ("status", "rewrite_source", "created_at")
-    search_fields = ("student_employee_id", "student_name")
+    list_filter = (
+        "status",
+        "career_level",
+        "rewrite_source",
+        "created_at",
+    )
+    search_fields = ("student_employee_id", "student_name", "target_role")
     readonly_fields = (
         "public_id",
         "score",

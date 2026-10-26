@@ -280,6 +280,12 @@ class ATSResumeCheck(models.Model):
         ("deterministic", "Deterministic"),
         ("llm", "Local LLM"),
     ]
+    CAREER_LEVELS = [
+        ("auto", "Auto-detect from resume"),
+        ("fresher", "Fresher"),
+        ("intern", "Intern"),
+        ("experienced", "Experienced"),
+    ]
 
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     student_employee_id = models.CharField(max_length=225, db_index=True)
@@ -290,6 +296,12 @@ class ATSResumeCheck(models.Model):
         on_delete=models.CASCADE,
     )
     job_description = models.TextField(blank=True)
+    target_role = models.CharField(max_length=200, blank=True)
+    career_level = models.CharField(
+        max_length=20,
+        choices=CAREER_LEVELS,
+        default="auto",
+    )
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,

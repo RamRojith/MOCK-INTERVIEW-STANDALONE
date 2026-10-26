@@ -1,11 +1,12 @@
 import json
 import importlib.util
+import logging
 
 from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.http import FileResponse, JsonResponse
+from django.http import FileResponse, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -28,6 +29,7 @@ from mock_interview.services.access import (
 )
 from mock_interview.services.interview_service import (
     InterviewStateError,
+    current_question,
     enrich_resume,
     ensure_report_evaluations,
     fast_pipeline_enabled,
@@ -39,7 +41,13 @@ from mock_interview.services.interview_service import (
     start_interview,
     submit_answer,
 )
-from mock_interview.speech.tts import TextToSpeechError, synthesize_question
+from mock_interview.speech.tts import (
+    TextToSpeechError,
+    synthesize_probe,
+    synthesize_question,
+    tts_status,
+    validate_audio_bytes,
+)
 from mock_interview.services.resume_parser import (
     ResumeValidationError,
     extract_resume_text,
@@ -47,7 +55,8 @@ from mock_interview.services.resume_parser import (
     validate_resume,
 )
 from mock_interview.speech.stt import SpeechToTextError
-from mock_interview.speech.tts import tts_status
+
+logger = logging.getLogger(__name__)
 
 
 def _owned_session(request, public_id):
@@ -257,6 +266,14 @@ def setup(request):
                     maximum=45,
                 ),
             )
+            logger.info(
+                "Selected interview round for session %s: %s (role=%s, "
+                "question_count=%s)",
+                session.public_id,
+                session.interview_round,
+                session.role,
+                session.question_count,
+            )
             return redirect("mock_interview:device_check", public_id=session.public_id)
     return render(
         request,
@@ -316,6 +333,105 @@ def instructions(request, public_id):
     )
 
 
+def _question_audio_problem(question):
+    """Return why the stored WAV cannot be spoken, or ``None`` when it is valid.
+
+    Older deployments generated a 2-second silent WAV in dummy mode, and a
+    file can also disappear or be truncated. Validating the samples (not just
+    the file's existence) is what lets the room repair those questions instead
+    of playing silence.
+    """
+    field = question.audio_file
+    if not field:
+        return "no question audio has been generated yet"
+    try:
+        if not field.storage.exists(field.name):
+            return f"the audio file {field.name!r} is missing"
+        with field.open("rb") as handle:
+            audio_bytes = handle.read(8 * 1024 * 1024)
+        validate_audio_bytes(audio_bytes, minimum_seconds=0.2)
+    except TextToSpeechError as exc:
+        return str(exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Could not read TTS audio for question %s: %s",
+            question.public_id,
+            exc,
+        )
+        return f"the audio file could not be read ({exc})"
+    return None
+
+
+def _question_audio_exists(question):
+    return _question_audio_problem(question) is None
+
+
+def _ensure_question_audio(question):
+    """Guarantee the room has a genuinely playable WAV for this question.
+
+    A missing/unreadable/silent file is deleted and synthesized again. Returns
+    ``(ready, problem)`` so the room can show the actual reason instead of
+    silently continuing without the interviewer's voice.
+    """
+    problem = _question_audio_problem(question)
+    if problem is None:
+        return True, ""
+
+    if question.audio_file:
+        logger.warning(
+            "Question %s audio is unusable (%s); deleting %r and regenerating",
+            question.public_id,
+            problem,
+            question.audio_file.name,
+        )
+        try:
+            question.audio_file.delete(save=False)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Could not delete unusable TTS audio for question %s",
+                question.public_id,
+                exc_info=True,
+            )
+        question.audio_file = None
+        question.save(update_fields=("audio_file",))
+
+    try:
+        synthesize_question(question)
+    except TextToSpeechError as exc:
+        logger.error(
+            "TTS unavailable for question %s (session %s): %s",
+            question.public_id,
+            question.session.public_id,
+            exc,
+        )
+        return False, str(exc)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Unexpected TTS failure for question %s (session %s)",
+            question.public_id,
+            question.session.public_id,
+        )
+        return False, "Unexpected TTS failure. Check the server log."
+
+    problem = _question_audio_problem(question)
+    if problem is not None:
+        logger.error(
+            "TTS produced unusable audio for question %s (session %s): %s",
+            question.public_id,
+            question.session.public_id,
+            problem,
+        )
+        return False, problem
+
+    logger.info(
+        "TTS ready for question %s (session %s): %s",
+        question.public_id,
+        question.session.public_id,
+        question.audio_file.name,
+    )
+    return True, ""
+
+
 @student_required
 def room(request, public_id):
     session = _owned_session(request, public_id)
@@ -337,11 +453,14 @@ def room(request, public_id):
     if not question:
         messages.info(request, "No unanswered question remains.")
         return redirect("mock_interview:processing", public_id=session.public_id)
-    if not question.audio_file:
-        try:
-            synthesize_question(question)
-        except TextToSpeechError:
-            pass
+    audio_ready, audio_error = _ensure_question_audio(question)
+    if not audio_ready:
+        logger.warning(
+            "Room for session %s cannot speak question Q%s: %s",
+            session.public_id,
+            question.sequence_number,
+            audio_error,
+        )
     draft_answer = (
         StudentAnswer.objects.filter(
             question=question,
@@ -361,6 +480,7 @@ def room(request, public_id):
             "is_final_question": question.sequence_number >= session.question_count,
             "focus_guard_count": int(focus_guard.get("count") or 0),
             "focus_guard_locked": bool(focus_guard.get("locked")),
+            "audio_error": audio_error,
         },
     )
 
@@ -403,8 +523,28 @@ def report(request, public_id):
 @require_POST
 def transcribe_answer(request, public_id):
     question = _owned_question(request, public_id)
-    if question.session.status != "in_progress":
+    session = question.session
+    if session.status != "in_progress":
         return _json_error("Interview is not in progress.", 409, "invalid_state")
+
+    # Only the question the room is actually showing may accept an upload. This
+    # rejects stale tabs, duplicated requests and a second recording that races
+    # the answer submission, so a late upload can never attach itself to an
+    # earlier turn or unlock the next question ahead of time.
+    active_question = current_question(session)
+    if active_question is None or active_question.pk != question.pk:
+        logger.warning(
+            "Rejected stale STT upload for Q%s in session %s (active question is %s)",
+            question.sequence_number,
+            session.public_id,
+            getattr(active_question, "sequence_number", None),
+        )
+        return _json_error(
+            "This question is no longer active. Reload the interview room.",
+            409,
+            "stale_question",
+        )
+
     uploaded = request.FILES.get("audio")
     if not uploaded:
         return _json_error("Audio file is required.")
@@ -415,7 +555,21 @@ def transcribe_answer(request, public_id):
     except ValueError as exc:
         return _json_error(str(exc), 400, "invalid_audio")
     except SpeechToTextError as exc:
+        logger.error(
+            "STT request failed for Q%s (session %s): %s",
+            question.sequence_number,
+            session.public_id,
+            exc,
+        )
         return _json_error(str(exc), 503, "transcription_failed")
+    logger.info(
+        "STT response for Q%s (session %s): %d chars, %ss audio, quality=%s",
+        question.sequence_number,
+        session.public_id,
+        len(answer.original_transcript or ""),
+        answer.duration_seconds,
+        (answer.speech_metrics or {}).get("transcript_quality", {}).get("status"),
+    )
     return JsonResponse(
         {
             "ok": True,
@@ -716,6 +870,10 @@ def delete_session(request, public_id):
 def runtime_status(request):
     ollama_online = health()
     model_ready = model_available() if ollama_online else False
+    tts = tts_status()
+    # The sample URL is separate from the synthesis result: the browser can
+    # only prove playback after the student presses the test button.
+    tts["sample_url"] = reverse("mock_interview:runtime_tts_sample")
     return JsonResponse(
         {
             "ok": True,
@@ -732,20 +890,61 @@ def runtime_status(request):
             "stt": {
                 "engine": "faster-whisper",
                 "ready": importlib.util.find_spec("faster_whisper") is not None,
+                "model": settings.MOCK_INTERVIEW.get("WHISPER_MODEL"),
+                "dummy": bool(
+                    settings.MOCK_INTERVIEW.get(
+                        "DUMMY_STT",
+                        settings.MOCK_INTERVIEW.get("DUMMY_MODE", False),
+                    )
+                ),
             },
-            "tts": tts_status(),
+            "tts": tts,
         }
     )
 
 
 @student_required
 @require_GET
+def tts_sample(request):
+    """Serve the cached interviewer-voice probe for the device check."""
+    try:
+        audio_bytes, metadata = synthesize_probe()
+    except TextToSpeechError as exc:
+        logger.warning("TTS sample requested but unavailable: %s", exc)
+        return _json_error(
+            f"Interviewer voice is unavailable: {exc}",
+            503,
+            "tts_unavailable",
+        )
+    logger.info(
+        "Serving TTS sample (bytes=%s duration=%.2fs sample_rate=%s)",
+        metadata["bytes"],
+        metadata["duration_seconds"],
+        metadata["sample_rate"],
+    )
+    response = HttpResponse(audio_bytes, content_type="audio/wav")
+    response["Cache-Control"] = "no-store, max-age=0"
+    response["X-TTS-Duration"] = str(metadata["duration_seconds"])
+    response["X-TTS-Sample-Rate"] = str(metadata["sample_rate"])
+    return response
+
+
+@student_required
+@require_GET
 def question_audio(request, public_id):
     question = _owned_question(request, public_id)
-    if not question.audio_file:
+    audio_ready, audio_error = _ensure_question_audio(question)
+    if not audio_ready:
+        logger.warning(
+            "Question audio requested for Q%s in session %s, but no playable "
+            "audio is available: %s",
+            question.sequence_number,
+            question.session.public_id,
+            audio_error,
+        )
         return _json_error(
-            "Local TTS audio is unavailable for this question.",
-            404,
+            f"Local TTS audio is unavailable for this question: {audio_error}",
+            503,
             "tts_unavailable",
         )
     return FileResponse(

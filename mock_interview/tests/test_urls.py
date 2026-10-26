@@ -27,6 +27,10 @@ class MockInterviewUrlTests(SimpleTestCase):
             reverse("mock_interview:runtime_status"),
             "/mock-interview/api/runtime/status/",
         )
+        self.assertEqual(
+            reverse("mock_interview:runtime_tts_sample"),
+            "/mock-interview/api/runtime/tts/sample/",
+        )
 
     def test_hod_dashboard_uses_uuid_safe_report_url_placeholder(self):
         template_path = (

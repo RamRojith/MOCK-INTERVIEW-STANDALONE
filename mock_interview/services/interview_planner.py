@@ -23,6 +23,14 @@ from mock_interview.ai.ollama_client import (
     configured_model,
 )
 from mock_interview.models import InterviewQuestion
+from mock_interview.services.interview_rounds import (
+    categories_for_count,
+    deterministic_round_question,
+    normalize_interview_round,
+    plan_matches_round,
+    round_profile,
+    round_prompt_block,
+)
 from mock_interview.services.telemetry import record_latency, timed_latency
 
 logger = logging.getLogger(__name__)
@@ -38,7 +46,14 @@ PLAN_SCHEMA = {
                     "text": {"type": "string", "minLength": 5},
                     "type": {
                         "type": "string",
-                        "enum": ["technical", "behavioural", "situational"],
+                        "enum": [
+                            "technical",
+                            "behavioural",
+                            "situational",
+                            "hr",
+                            "project",
+                            "managerial",
+                        ],
                     },
                     "topic": {"type": "string"},
                     "difficulty": {"type": "integer", "minimum": 1, "maximum": 5},
@@ -94,6 +109,11 @@ def _clean_skills(session):
     return [str(item).strip() for item in skills if str(item).strip()][:8]
 
 
+def _is_role_based_session(session):
+    """The six-round student flow; faculty document interviews use a mode."""
+    return not bool(getattr(session, "mock_interview_id", None))
+
+
 def _plan_context(session):
     """Compact, context-window-friendly planning context for one session."""
     if getattr(session, "mock_interview_id", None):
@@ -122,13 +142,17 @@ def _plan_context(session):
             structured = normalize_resume(session.resume.extracted_text or "")
         except Exception:
             structured = session.resume.structured_profile or {}
+    round_label = normalize_interview_round(session.interview_round)
+    categories = categories_for_count(round_label, session.question_count)
     return {
         "interview_type": "role_based",
         "role": session.role,
         "company_name": session.company_name,
         "job_description": (session.job_description or "")[:1500],
         "difficulty": session.difficulty,
-        "round": session.interview_round,
+        "round": round_label,
+        "round_focus": round_profile(round_label)["focus"],
+        "round_question_categories": list(categories),
         "target_skills": _clean_skills(session),
         "language_mode": session.language_mode,
         "question_count": int(session.question_count),
@@ -153,6 +177,17 @@ _PLAN_SYSTEM_PROMPT = (
 )
 
 
+def _plan_system_prompt(session):
+    """Base planner prompt plus the selected round contract (student flow)."""
+    if not _is_role_based_session(session):
+        return _PLAN_SYSTEM_PROMPT
+    return (
+        _PLAN_SYSTEM_PROMPT
+        + "\n\n"
+        + round_prompt_block(session.interview_round, session.question_count)
+    )
+
+
 def _normalize_plan_item(item, seq):
     return {
         "question_text": str(item.get("text") or "").strip(),
@@ -172,30 +207,25 @@ def _ramp_difficulty(seq):
 
 
 def _deterministic_pool_question(session, seq):
+    if _is_role_based_session(session):
+        # The round contract decides the category, including the controlled
+        # Mixed cycle, so a fallback pool is just as round-appropriate as an
+        # LLM-generated one.
+        return deterministic_round_question(session, seq)
+
     skills = _clean_skills(session)
     difficulty = _ramp_difficulty(seq)
-    if getattr(session, "mock_interview_id", None):
-        mock = session.mock_interview
-        subject = f"{mock.subject_code}" + (f" - {mock.chapter}" if mock.chapter else "")
-        topic = skills[(seq - 1) % len(skills)] if skills else f"{subject} concept"
-        text = (
-            f"Explain the core concept behind {topic} in the context of "
-            f"{mock.title} and give a practical example."
-        )
-        selection_reason = (
-            f"Tier {difficulty} pool question on {topic or subject} "
-            "with a practical-example probe."
-        )
-    else:
-        topic = skills[(seq - 1) % len(skills)] if skills else session.role
-        text = (
-            f"Walk me through how you applied {topic} in a real project. "
-            "Explain the approach, the outcome, and what you would do differently."
-        )
-        selection_reason = (
-            f"Tier {difficulty} pool question probing {topic} with an "
-            "approach/outcome/retrospective structure."
-        )
+    mock = session.mock_interview
+    subject = f"{mock.subject_code}" + (f" - {mock.chapter}" if mock.chapter else "")
+    topic = skills[(seq - 1) % len(skills)] if skills else f"{subject} concept"
+    text = (
+        f"Explain the core concept behind {topic} in the context of "
+        f"{mock.title} and give a practical example."
+    )
+    selection_reason = (
+        f"Tier {difficulty} pool question on {topic or subject} "
+        "with a practical-example probe."
+    )
     return {
         "question_text": text,
         "question_type": "technical",
@@ -217,8 +247,25 @@ def _request_plan(session):
         import json as _json
 
         context_text = _json.dumps(_plan_context(session), ensure_ascii=False)
+        system_prompt = _plan_system_prompt(session)
+        role_based = _is_role_based_session(session)
+        round_label = normalize_interview_round(session.interview_round)
+        expected_categories = categories_for_count(
+            round_label,
+            session.question_count,
+        )
+        logger.info(
+            "Question-plan request: session=%s round=%s categories=%s "
+            "role_based=%s prompt_mode=%s prompt_chars=%d",
+            getattr(session, "public_id", ""),
+            round_label,
+            ",".join(expected_categories),
+            role_based,
+            "round_specific" if role_based else "faculty_document",
+            len(system_prompt),
+        )
         messages = [
-            {"role": "system", "content": _PLAN_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": (
@@ -238,7 +285,23 @@ def _request_plan(session):
         items = result.get("questions") or []
         if not isinstance(items, list) or not items:
             raise LocalModelError("Planner returned no questions.")
-        return [_normalize_plan_item(item, i) for i, item in enumerate(items, 1)]
+        plan = [_normalize_plan_item(item, i) for i, item in enumerate(items, 1)]
+        if role_based:
+            matches, detail = plan_matches_round(
+                round_label,
+                plan,
+                session.question_count,
+            )
+            if not matches:
+                logger.warning(
+                    "Question plan rejected for session %s: round=%s %s. "
+                    "Using deterministic round-specific questions.",
+                    getattr(session, "public_id", ""),
+                    round_label,
+                    detail,
+                )
+                return None
+        return plan
     except LocalModelError as exc:
         logger.warning(
             "Question-pool planning fell back to deterministic questions: %s. "
@@ -304,15 +367,28 @@ def build_question_pool(session, *, force=False):
         ]
         InterviewQuestion.objects.bulk_create(created)
 
+        round_label = normalize_interview_round(session.interview_round)
+        categories = categories_for_count(round_label, count)
         state = dict(session.interview_state or {})
-        state["pool"] = {"built": True, "size": count, "model": model_name}
+        state["pool"] = {
+            "built": True,
+            "size": count,
+            "model": model_name,
+            "round": round_label,
+            "categories": list(categories),
+            "prompt_mode": (
+                "round_specific" if _is_role_based_session(session) else "faculty_document"
+            ),
+        }
         session.interview_state = state
         session.save(update_fields=("interview_state", "updated_at"))
         logger.info(
-            "Built %d-question pool for session %s (%s)",
+            "Built %d-question pool for session %s (%s): round=%s categories=%s",
             count,
             session.public_id,
             model_name,
+            round_label,
+            ",".join(categories),
         )
         return list(session.questions.order_by("sequence_number"))
 

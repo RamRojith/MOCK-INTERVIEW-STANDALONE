@@ -6,9 +6,14 @@ a local SQLite database and two local stub apps (``user_accounts`` and
 
 ``MOCK_INTERVIEW['DUMMY_MODE']`` makes every inference seam (LLM / STT / TTS /
 RAG) run fully offline, so the site works with no Ollama, Whisper, Kokoro,
-Piper or Qdrant running.
+Piper or Qdrant running. ``MOCK_INTERVIEW['DUMMY_STT']`` and
+``MOCK_INTERVIEW['DUMMY_TTS']`` switch speech recognition and speech synthesis
+independently, so the real local engines can run while the LLM keeps its
+offline stand-in. Dummy TTS writes silent audio, so it is reported as *not*
+ready by the device check.
 """
 
+import importlib.util
 import os
 from pathlib import Path
 
@@ -107,6 +112,22 @@ MOCK_INTERVIEW = {
     "DUMMY_MODE": os.environ.get(
         "MOCK_INTERVIEW_DUMMY_MODE", "true"
     ).lower() in {"1", "true", "yes"},
+    # Speech-to-text is switched independently of the other inference seams.
+    # Once Faster-Whisper is installed the real engine is used even while the
+    # LLM/TTS still run their offline stand-ins. Set
+    # MOCK_INTERVIEW_DUMMY_STT=true to force the canned transcript or
+    # MOCK_INTERVIEW_DUMMY_STT=false to require the real engine.
+    "DUMMY_STT": os.environ.get(
+        "MOCK_INTERVIEW_DUMMY_STT",
+        "false" if importlib.util.find_spec("faster_whisper") else "true",
+    ).lower() in {"1", "true", "yes"},
+    # TTS defaults to the global dummy mode, but can be switched on its own.
+    # The dummy engine writes silence, so it is never reported as ready by the
+    # device check; set MOCK_INTERVIEW_DUMMY_TTS=false to require real speech.
+    "DUMMY_TTS": os.environ.get(
+        "MOCK_INTERVIEW_DUMMY_TTS",
+        os.environ.get("MOCK_INTERVIEW_DUMMY_MODE", "true"),
+    ).lower() in {"1", "true", "yes"},
     "OLLAMA_BASE_URL": os.environ.get(
         "MOCK_INTERVIEW_OLLAMA_BASE_URL", "http://127.0.0.1:11434"
     ),
@@ -192,6 +213,14 @@ MOCK_INTERVIEW = {
     ).lower() in {"1", "true", "yes"},
     "TTS_CACHE_DIR": os.environ.get("MOCK_INTERVIEW_TTS_CACHE_DIR", "tts_cache"),
 }
+
+# Optional machine-local overrides that must not be committed. A deployment can
+# create mock_interview_site/local_settings.py with, for example:
+#   MOCK_INTERVIEW_OVERRIDES = {"WHISPER_MODEL": "small"}
+if importlib.util.find_spec("mock_interview_site.local_settings"):
+    from .local_settings import MOCK_INTERVIEW_OVERRIDES
+
+    MOCK_INTERVIEW.update(MOCK_INTERVIEW_OVERRIDES)
 
 # RAG pipeline configuration (ported from the ERP settings.py).
 RAG_CONFIG = {

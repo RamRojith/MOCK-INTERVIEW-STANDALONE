@@ -1,8 +1,12 @@
+import logging
 from functools import lru_cache
 from collections import Counter
+from pathlib import Path
 import re
 
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 
 class SpeechToTextError(RuntimeError):
@@ -10,7 +14,13 @@ class SpeechToTextError(RuntimeError):
 
 
 def _dummy_mode():
-    return bool(settings.MOCK_INTERVIEW.get("DUMMY_MODE", False))
+    """True when speech-to-text should return the canned transcript.
+
+    ``DUMMY_STT`` can be toggled on its own: the offline LLM/TTS stand-ins can
+    stay enabled while real speech recognition runs, and vice versa.
+    """
+    config = getattr(settings, "MOCK_INTERVIEW", {})
+    return bool(config.get("DUMMY_STT", config.get("DUMMY_MODE", False)))
 
 
 # Canned transcript used when DUMMY_MODE is on so the whole interview works
@@ -54,12 +64,81 @@ def _load_model(model_name, device, compute_type):
             "Faster Whisper is not installed. Install the documented open-source "
             "speech dependencies before transcribing audio."
         ) from exc
-    return WhisperModel(model_name, device=device, compute_type=compute_type)
+    try:
+        logger.info(
+            "Loading Faster-Whisper model=%s device=%s compute_type=%s",
+            model_name,
+            device,
+            compute_type,
+        )
+        model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    except Exception as exc:
+        # Model download/load failures must surface as a SPEECH error, not as an
+        # unhandled 500: the room turns this into a readable 503 and lets the
+        # student retry instead of silently losing the recorded answer.
+        logger.exception(
+            "Faster-Whisper model %s could not be loaded on %s",
+            model_name,
+            device,
+        )
+        raise SpeechToTextError(
+            f"Speech recognition model '{model_name}' could not be loaded "
+            f"on {device}: {exc}"
+        ) from exc
+    logger.info("Faster-Whisper model=%s is ready", model_name)
+    return model
+
+
+def _audio_context(audio_source):
+    """Best-effort audio metadata for logs (never raises, never consumes input)."""
+    context = {
+        "source": type(audio_source).__name__,
+        "container": None,
+        "sample_rate": None,
+        "channels": None,
+        "size_bytes": None,
+    }
+    if not hasattr(audio_source, "read"):
+        try:
+            context["size_bytes"] = Path(str(audio_source)).stat().st_size
+        except OSError:
+            pass
+        return context
+
+    try:
+        position = audio_source.tell()
+    except Exception:
+        position = None
+    try:
+        header = audio_source.read(64)
+        if header[:4] == b"RIFF" and header[8:12] == b"WAVE":
+            context["container"] = "wav"
+            context["channels"] = int.from_bytes(header[22:24], "little")
+            context["sample_rate"] = int.from_bytes(header[24:28], "little")
+        elif header[:4] == b"\x1a\x45\xdf\xa3":
+            context["container"] = "webm"
+        elif header[:4] == b"OggS":
+            context["container"] = "ogg"
+        elif len(header) >= 12 and header[4:8] == b"ftyp":
+            context["container"] = "mp4"
+        elif header.startswith(b"ID3"):
+            context["container"] = "mp3"
+        get_size = getattr(audio_source, "size", None)
+        if isinstance(get_size, int):
+            context["size_bytes"] = get_size
+    except Exception:
+        pass
+    try:
+        audio_source.seek(0 if position is None else position)
+    except Exception:
+        pass
+    return context
 
 
 def preload_whisper_model():
     """Pre-load the Whisper model at startup to avoid cold-start latency."""
     if _dummy_mode():
+        logger.info("STT dummy mode: Whisper is never loaded.")
         return
     config = settings.MOCK_INTERVIEW
     model_name = config.get("WHISPER_MODEL", "large-v3-turbo")
@@ -126,6 +205,10 @@ def assess_transcript_quality(transcript, duration_seconds, segment_list):
 def transcribe_audio(path, language_mode="en"):
     config = settings.MOCK_INTERVIEW
     if _dummy_mode():
+        logger.info(
+            "STT dummy mode: returning the canned transcript instead of decoding "
+            "the uploaded audio (container/sample rate are not inspected)."
+        )
         words = _dummy_words(_DUMMY_TRANSCRIPT)
         duration = max((word["end"] for word in words), default=0.0)
         return {
@@ -154,6 +237,19 @@ def transcribe_audio(path, language_mode="en"):
     model = _load_model(model_name, device, compute_type)
     language = {"en": "en", "ta": "ta"}.get(language_mode)
     audio_source = path if hasattr(path, "read") else str(path)
+    audio_info = _audio_context(audio_source)
+    if hasattr(audio_source, "seek"):
+        try:
+            audio_source.seek(0)
+        except Exception:
+            pass
+    logger.info(
+        "STT inference start: model=%s language=%s requested_mode=%s audio=%s",
+        model_name,
+        language or "auto",
+        language_mode,
+        audio_info,
+    )
     try:
         segments, info = model.transcribe(
             audio_source,
@@ -180,6 +276,9 @@ def transcribe_audio(path, language_mode="en"):
         )
         segment_list = list(segments)
     except Exception as exc:
+        logger.exception(
+            "STT inference failed: model=%s audio=%s", model_name, audio_info
+        )
         raise SpeechToTextError(f"Audio transcription failed: {exc}") from exc
 
     transcript = " ".join(segment.text.strip() for segment in segment_list).strip()
@@ -206,6 +305,25 @@ def transcribe_audio(path, language_mode="en"):
         duration,
         segment_list,
     )
+    logger.info(
+        "STT inference done: model=%s language=%s chars=%d words=%d "
+        "duration=%.1fs confidence=%s container=%s sample_rate=%s quality=%s",
+        model_name,
+        getattr(info, "language", language or ""),
+        len(transcript),
+        len(words),
+        duration,
+        confidence,
+        audio_info.get("container"),
+        audio_info.get("sample_rate"),
+        quality.get("status"),
+    )
+    if not transcript:
+        logger.warning(
+            "STT returned an empty transcript (audio=%s). The student must "
+            "re-record or type the answer.",
+            audio_info,
+        )
     return {
         "transcript": transcript,
         "detected_language": getattr(info, "language", language or ""),

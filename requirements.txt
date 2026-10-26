@@ -10,7 +10,9 @@ numpy>=1.26
 
 # ── Optional: only needed when MOCK_INTERVIEW_DUMMY_MODE=false ──────────────
 # Local LLM (Ollama is a separate service; no Python package required)
-# faster-whisper>=1.0        # speech-to-text
-# kokoro-onnx>=0.3           # text-to-speech (or use piper-tts)
+# faster-whisper>=1.0        # real speech-to-text: pip install faster-whisper
+# kokoro-onnx>=0.6.1         # real text-to-speech (pulls in onnxruntime,
+#                            # phonemizer and espeakng-loader)
+# soundfile>=0.13            # writes the synthesized PCM audio as WAV
 # sentence-transformers>=3.0 # resume/document embeddings
 # qdrant-client>=1.9         # RAG vector store

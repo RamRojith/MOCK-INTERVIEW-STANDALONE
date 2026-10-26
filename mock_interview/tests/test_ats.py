@@ -318,7 +318,11 @@ class AtsResumeGeneratorTests(SimpleTestCase):
         self.assertIn("skills", keys)
         expected_order = [
             key for key in
-            ("summary", "skills", "projects", "experience", "education", "certifications")
+            (
+                "summary", "education", "skills", "real_projects", "projects",
+                "certifications", "experience", "academic_projects",
+                "achievements",
+            )
             if key in keys
         ]
         self.assertEqual(
@@ -354,7 +358,7 @@ class AtsResumeGeneratorTests(SimpleTestCase):
             ["AWS Certified Cloud Practitioner"],
         )
 
-    def test_rewrite_map_is_never_applied_to_the_download(self):
+    def test_rewrite_map_is_rejected_when_it_drops_evidence(self):
         resume = SimpleNamespace(
             extracted_text=GOOD_TEXT,
             structured_profile=GOOD_PROFILE,
@@ -364,15 +368,297 @@ class AtsResumeGeneratorTests(SimpleTestCase):
         experience = next(s for s in sections if s["key"] == "experience")
         original = [item["text"] for item in experience["items"]]
 
+        warnings = []
         rewritten = build_sections(
             resume,
-            rewrite_map={"experience": ["Optimized SQL queries, reducing runtime by 40%."]},
+            rewrite_map={"experience": ["Optimized query performance."]},
+            warnings=warnings,
         )
         experience_after = next(s for s in rewritten if s["key"] == "experience")
         self.assertEqual(
             [item["text"] for item in experience_after["items"]],
             original,
         )
+        self.assertTrue(any("dropped verified details" in w for w in warnings))
+
+    def test_faithful_rewrite_is_applied(self):
+        resume = SimpleNamespace(
+            extracted_text=GOOD_TEXT,
+            structured_profile=GOOD_PROFILE,
+            student_name="Priya Ramesh",
+        )
+        meta = {}
+        sections = build_sections(
+            resume,
+            rewrite_map={
+                "experience": [
+                    "Built a REST API for a hostel management system, serving "
+                    "2,000+ users.",
+                    "Reduced query time by 40%.",
+                    "Automated CI builds, cutting release time by 30%.",
+                ],
+            },
+            meta=meta,
+        )
+        experience = next(s for s in sections if s["key"] == "experience")
+        texts = [item["text"] for item in experience["items"]]
+        self.assertIn("Built a REST API for a hostel management system, serving 2,000+ users.", texts)
+        self.assertTrue(meta["applied_rewrites"])
+        self.assertIn("experience", meta["applied_keys"])
+
+    def test_rewrite_guard_rejects_new_technology_and_metric(self):
+        resume = SimpleNamespace(
+            extracted_text=GOOD_TEXT,
+            structured_profile=GOOD_PROFILE,
+            student_name="Priya Ramesh",
+        )
+        warnings = []
+        sections = build_sections(
+            resume,
+            rewrite_map={
+                "experience": [
+                    "Deployed Docker and Kubernetes workloads for 9,500 users.",
+                ],
+            },
+            warnings=warnings,
+        )
+        text = "\n".join(
+            item["text"]
+            for section in sections
+            for item in section.get("items", [])
+        )
+        self.assertNotIn("9,500", text)
+        self.assertNotIn("Kubernetes", text)
+        self.assertTrue(warnings)
+
+    def test_skills_are_grouped_without_ratings_or_stars(self):
+        resume = SimpleNamespace(
+            extracted_text=NO_EVIDENCE_TEXT,
+            structured_profile=NO_EVIDENCE_PROFILE,
+            student_name="Juan Dela Cruz",
+        )
+        sections = build_sections(resume)
+        skills = next(s for s in sections if s["key"] == "skills")
+        text = "\n".join(item["text"] for item in skills["items"])
+        self.assertIn("Developer Tools", text)
+        self.assertIn("Relevant Domain Skills", text)
+        self.assertIn("Adobe Photoshop", text)
+        self.assertNotIn("%", text)
+        self.assertNotIn("98", text)
+
+    def test_portfolio_link_is_included_in_header(self):
+        text = GOOD_TEXT.replace(
+            "linkedin.com/in/priya-ramesh",
+            "linkedin.com/in/priya-ramesh\nhttps://priya.dev",
+        )
+        resume = SimpleNamespace(
+            extracted_text=text,
+            structured_profile=GOOD_PROFILE,
+            student_name="Priya Ramesh",
+        )
+        contact = build_sections(resume)[0]["contact"]
+        self.assertIn("https://priya.dev", contact)
+
+    def test_header_keeps_full_location_and_international_phone(self):
+        resume = SimpleNamespace(
+            extracted_text=NO_EVIDENCE_TEXT,
+            structured_profile=NO_EVIDENCE_PROFILE,
+            student_name="Juan Dela Cruz",
+        )
+        contact = build_sections(resume)[0]["contact"]
+        self.assertIn("Quezon City", contact)
+        self.assertIn("+63 917 123 4567", contact)
+
+    def test_skills_line_is_not_mistaken_for_a_location(self):
+        text = (
+            "Priya Ramesh\npriya.ramesh@example.com | +91 98765 43210\n"
+            "Python, SQL\nOBJECTIVE\nFinal-year B.Tech student with Python skills.\n"
+            "EDUCATION\nB.Tech CSE, RIT, 2026\nSKILLS\nPython, SQL\n"
+        )
+        resume = SimpleNamespace(
+            extracted_text=text,
+            structured_profile={},
+            student_name="Priya Ramesh",
+        )
+        contact = build_sections(resume)[0]["contact"]
+        self.assertNotIn("Python, SQL", contact)
+
+    def test_labelled_contact_block_keeps_all_contact_details(self):
+        text = (
+            "CURRICULUM VITAE\nName: Priya Ramesh\n"
+            "CONTACT\nLocation: Bengaluru, Karnataka\n"
+            "+91 98765 43210 | priya.ramesh@example.com\n"
+            "SUMMARY\nFinal-year B.Tech student with Python skills.\n"
+            "EDUCATION\nB.Tech CSE, RIT, 2026\n"
+            "SKILLS\nPython, SQL\n"
+        )
+        resume = SimpleNamespace(
+            extracted_text=text,
+            structured_profile={},
+            student_name="",
+        )
+        header = build_sections(resume)[0]
+        self.assertEqual(header["name"], "Priya Ramesh")
+        self.assertIn("Bengaluru, Karnataka", header["contact"])
+        self.assertIn("+91 98765 43210", header["contact"])
+        self.assertIn("priya.ramesh@example.com", header["contact"])
+
+    def test_pipe_separated_header_gets_name_and_country_location(self):
+        text = (
+            "CURRICULUM VITAE\n"
+            "Name: Priya Ramesh | Bengaluru, Karnataka, India\n"
+            "priya.ramesh@example.com | +91 98765 43210\n"
+            "SUMMARY\nFinal-year B.Tech student with Python skills.\n"
+            "EDUCATION\nB.Tech CSE, RIT, 2026\n"
+            "SKILLS\nPython, SQL\n"
+        )
+        resume = SimpleNamespace(
+            extracted_text=text,
+            structured_profile={},
+            student_name="",
+        )
+        header = build_sections(resume)[0]
+        self.assertEqual(header["name"], "Priya Ramesh")
+        self.assertIn("Bengaluru, Karnataka, India", header["contact"])
+        self.assertNotIn("Priya Ramesh, Bengaluru", header["contact"])
+
+    def test_combined_internship_heading_is_detected_as_intern_level(self):
+        text = (
+            "Priya Ramesh\npriya.ramesh@example.com | +91 98765 43210\n"
+            "SUMMARY\nFinal-year B.Tech student with Python skills.\n"
+            "EDUCATION\nB.Tech CSE, RIT, 2026\n"
+            "SKILLS\nPython, SQL\n"
+            "INTERNSHIPS & EXPERIENCE\nAcme Corp\n- Built a Python API.\n"
+        )
+        resume = SimpleNamespace(
+            extracted_text=text,
+            structured_profile={},
+            student_name="Priya Ramesh",
+        )
+        meta = {}
+        build_sections(resume, meta=meta)
+        self.assertEqual(meta["career_level"], "intern")
+
+    def test_target_role_and_level_shape_objective(self):
+        resume = SimpleNamespace(
+            extracted_text=GOOD_TEXT,
+            structured_profile=GOOD_PROFILE,
+            student_name="Priya Ramesh",
+        )
+        sections = build_sections(
+            resume,
+            target_role="Backend Developer",
+            career_level="fresher",
+        )
+        summary = next(s for s in sections if s["key"] == "summary")
+        self.assertEqual(summary["title"], "OBJECTIVE")
+        text = " ".join(item["text"] for item in summary["items"])
+        self.assertIn("Backend Developer", text)
+        self.assertIn("Python", text)
+        self.assertNotIn("Kubernetes", text)
+
+    def test_profile_fallback_cannot_add_hallucinated_skills(self):
+        text = (
+            "Priya Ramesh\npriya.ramesh@example.com +91 98765 43210\n"
+            "EDUCATION\nB.Tech CSE, RIT, 2026\n"
+            "PROJECTS\nBuilt a Python utility.\n"
+        )
+        resume = SimpleNamespace(
+            extracted_text=text,
+            structured_profile={
+                "skills": ["Python", "Kubernetes"],
+                "education": ["B.Tech CSE, RIT, 2026"],
+                "projects": ["Built a Python utility."],
+                "experience": [],
+                "certifications": [],
+            },
+            student_name="Priya Ramesh",
+        )
+        sections = build_sections(resume)
+        skills = next(s for s in sections if s["key"] == "skills")
+        skill_text = " ".join(item["text"] for item in skills["items"])
+        self.assertIn("Python", skill_text)
+        self.assertNotIn("Kubernetes", skill_text)
+
+    def test_real_time_and_academic_projects_are_separate(self):
+        text = (
+            "Priya Ramesh\npriya.ramesh@example.com +91 98765 43210\n"
+            "OBJECTIVE\nFinal-year B.Tech student with Python skills.\n"
+            "EDUCATION\nB.Tech CSE, RIT, 2026\n"
+            "SKILLS\nPython, SQL\n"
+            "REAL-TIME PROJECTS\nIntern Portal\n- Built a Python API.\n"
+            "CERTIFICATIONS\nAWS Certified Cloud Practitioner\n"
+            "INTERNSHIPS & EXPERIENCE\nSoftware Intern, Acme\n"
+            "- Automated CI builds.\n"
+            "ACADEMIC PROJECTS\nFeedback Classifier\n"
+            "- Trained a model in Python.\n"
+            "ACHIEVEMENTS\n- Won a college hackathon.\n"
+        )
+        resume = SimpleNamespace(
+            extracted_text=text,
+            structured_profile={},
+            student_name="Priya Ramesh",
+        )
+        sections = build_sections(resume, career_level="fresher")
+        keys = [section["key"] for section in sections]
+        self.assertIn("real_projects", keys)
+        self.assertIn("academic_projects", keys)
+        real = next(s for s in sections if s["key"] == "real_projects")
+        academic = next(s for s in sections if s["key"] == "academic_projects")
+        self.assertIn("Intern Portal", " ".join(i["text"] for i in real["items"]))
+        self.assertIn(
+            "Feedback Classifier",
+            " ".join(i["text"] for i in academic["items"]),
+        )
+        self.assertEqual(real["title"], "REAL-TIME PROJECTS")
+        self.assertEqual(academic["title"], "ACADEMIC PROJECTS")
+        self.assertLess(keys.index("real_projects"), keys.index("certifications"))
+        self.assertLess(keys.index("experience"), keys.index("academic_projects"))
+
+    def test_generation_flags_spelling_and_repeated_words(self):
+        text = GOOD_TEXT.replace(
+            "Built a feedback classifier in Python and SQL.",
+            "Built the the feedback classifier and recieve data in Python.",
+        )
+        resume = SimpleNamespace(
+            extracted_text=text,
+            structured_profile=GOOD_PROFILE,
+            student_name="Priya Ramesh",
+        )
+        warnings = []
+        build_sections(resume, warnings=warnings)
+        self.assertTrue(any("spelling" in w.lower() for w in warnings))
+        self.assertTrue(any("repeated word" in w.lower() for w in warnings))
+
+    def test_docx_is_single_column_and_has_no_tables(self):
+        resume = SimpleNamespace(
+            extracted_text=GOOD_TEXT,
+            structured_profile=GOOD_PROFILE,
+            student_name="Priya Ramesh",
+        )
+        data = build_docx(build_sections(resume))
+        from docx import Document
+        doc = Document(io.BytesIO(data))
+        self.assertEqual(len(doc.tables), 0)
+        self.assertTrue(doc.paragraphs)
+
+    def test_pdf_text_is_selectable(self):
+        from pypdf import PdfReader
+        resume = SimpleNamespace(
+            extracted_text=GOOD_TEXT,
+            structured_profile=GOOD_PROFILE,
+            student_name="Priya Ramesh",
+        )
+        data = build_pdf(build_sections(resume))
+        reader = PdfReader(io.BytesIO(data))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        self.assertIn("Priya Ramesh", text)
+        self.assertIn("SKILLS", text)
+        self.assertIn("INTERNSHIPS & EXPERIENCE", text)
+        # Reportlab's bullet glyph can extract as DEL; ASCII bullets keep the
+        # generated PDF machine-readable for ATS parsers.
+        self.assertNotIn("\x7f", text)
+        self.assertIn("- Programming Languages:", text)
 
     def test_docx_magic_bytes(self):
         resume = SimpleNamespace(
@@ -448,11 +734,19 @@ class AtsRunCheckTests(TestCase):
         check.refresh_from_db()
 
         self.assertEqual(check.status, "ready")
-        # The download is always the student's own wording, never an LLM pass.
+        # The patched rewrite dropped verified details, so the guard must keep
+        # the student's own wording and record why.
         self.assertEqual(str(check.rewrite_source), "deterministic")
-        self.assertEqual(check.rewrite_warnings, [])
+        self.assertTrue(check.rewrite_warnings)
+        self.assertTrue(
+            any("ignored" in w.lower() for w in check.rewrite_warnings)
+        )
         self.assertGreater(float(check.score), 0)
         self.assertEqual(check.analysis_mode, "resume_plus_jd")
+        # Blank form values are resolved from the upload/JD and persisted for
+        # the report instead of remaining empty.
+        self.assertEqual(check.target_role, "Python Developer")
+        self.assertEqual(check.career_level, "fresher")
         matched = {k.lower() for k in check.matched_keywords}
         self.assertIn("python", matched)
         self.assertTrue(check.score_label)
@@ -473,14 +767,22 @@ class AtsRunCheckTests(TestCase):
         for detail in GOOD_PROFILE["experience"] + GOOD_PROFILE["education"] \
                 + GOOD_PROFILE["certifications"]:
             self.assertIn(detail, text)
-        self.assertIn("Python, SQL, Java, Spring Boot, MySQL, Git, Docker", text)
+        for skill in GOOD_PROFILE["skills"]:
+            self.assertIn(skill, text)
+        self.assertIn("Programming Languages:", text)
+        self.assertIn("Frameworks and Libraries:", text)
+        self.assertIn("Databases:", text)
+        self.assertIn("Cloud and Deployment:", text)
+        self.assertIn("Developer Tools:", text)
         self.assertIn("Priya Ramesh", text)
+        self.assertIn("OBJECTIVE", text)
+        self.assertNotIn("Python, SQL  |", text)
         # The LLM rewrite output (patched above) must never leak into the file.
         self.assertNotIn("Optimized SQL queries", text)
 
     @patch(
         "mock_interview.ai.ats_rewriter.rewrite_resume_bullets",
-        return_value=None,
+        return_value=(None, []),
     )
     def test_run_ats_check_falls_back_to_deterministic(self, _rewrite):
         check = self._check()
@@ -490,6 +792,41 @@ class AtsRunCheckTests(TestCase):
         self.assertEqual(check.status, "ready")
         self.assertEqual(str(check.rewrite_source), "deterministic")
         self.assertTrue(check.generated_docx)
+
+    @patch(
+        "mock_interview.ai.ats_rewriter.rewrite_resume_bullets",
+        return_value=(
+            {
+                "summary": [
+                    "Final-year B.Tech CSE student with strong Python and SQL "
+                    "skills, targeting a Backend Developer role."
+                ]
+            },
+            [],
+        ),
+    )
+    def test_safe_rewrite_sets_llm_source(self, _rewrite):
+        resume = self._resume()
+        check = ATSResumeCheck.objects.create(
+            student_employee_id="22CS001",
+            student_name="Priya Ramesh",
+            source_resume=resume,
+            job_description="Backend Developer with Python, MySQL, and Docker.",
+            target_role="Backend Developer",
+            career_level="fresher",
+        )
+        run_ats_check(check)
+        check.refresh_from_db()
+
+        self.assertEqual(check.status, "ready")
+        self.assertEqual(str(check.rewrite_source), "llm")
+        self.assertEqual(check.rewrite_warnings, [])
+        from docx import Document
+        doc = Document(check.generated_docx.path)
+        text = "\n".join(paragraph.text for paragraph in doc.paragraphs)
+        self.assertIn("targeting a Backend Developer role", text)
+        # The score still reflects the deterministic source analysis.
+        self.assertGreater(float(check.score), 0)
 
     def test_run_ats_check_with_empty_context_still_scores(self):
         resume = ResumeDocument.objects.create(
@@ -510,6 +847,7 @@ class AtsRunCheckTests(TestCase):
         check.refresh_from_db()
         self.assertEqual(check.status, "ready")
         self.assertLess(float(check.score), 40)
+        self.assertEqual(check.student_name, "Just a name")
 
 
 class AtsCheckerViewTests(TestCase):
@@ -519,7 +857,7 @@ class AtsCheckerViewTests(TestCase):
 
     @patch(
         "mock_interview.ai.ats_rewriter.rewrite_resume_bullets",
-        return_value=None,
+        return_value=(None, []),
     )
     @patch(
         "mock_interview.services.interview_service.normalize_resume",
@@ -533,7 +871,12 @@ class AtsCheckerViewTests(TestCase):
         )
         request = self.factory.post(
             self.url,
-            {"resume": uploaded, "job_description": "Python developer with SQL."},
+            {
+                "resume": uploaded,
+                "job_description": "Python developer with SQL.",
+                "target_role": "Backend Developer",
+                "career_level": "fresher",
+            },
         )
         request.user = _student_request()
         _attached_messages(request)
@@ -543,8 +886,16 @@ class AtsCheckerViewTests(TestCase):
         check = ATSResumeCheck.objects.get()
         self.assertIn(str(check.public_id), response.url)
         self.assertEqual(check.status, "ready")
+        self.assertEqual(check.target_role, "Backend Developer")
+        self.assertEqual(check.career_level, "fresher")
         self.assertEqual(str(check.rewrite_source), "deterministic")
         self.assertTrue(check.generated_docx)
+        self.assertIn("Priya_Ramesh", check.generated_docx.name)
+        from docx import Document
+        doc = Document(check.generated_docx.path)
+        text = "\n".join(paragraph.text for paragraph in doc.paragraphs)
+        self.assertIn("Priya Ramesh", text)
+        self.assertNotIn("Student One", text)
 
     def _run_view(self, request):
         mock_qs = MagicMock()
@@ -596,7 +947,7 @@ class AtsOwnershipTests(TestCase):
 
     @patch(
         "mock_interview.ai.ats_rewriter.rewrite_resume_bullets",
-        return_value=None,
+        return_value=(None, []),
     )
     def test_other_student_cannot_access_check(self, _rewrite):
         check = self._setup_check()
@@ -635,7 +986,7 @@ class AtsDownloadTests(TestCase):
         )
         with patch(
             "mock_interview.ai.ats_rewriter.rewrite_resume_bullets",
-            return_value=None,
+            return_value=(None, []),
         ):
             run_ats_check(check)
         return check
@@ -654,6 +1005,7 @@ class AtsDownloadTests(TestCase):
             response.headers["Content-Type"],
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
+        self.assertIn("Priya_Ramesh", response.headers["Content-Disposition"])
 
     def test_download_pdf_returns_file(self):
         check = self._ready_check()

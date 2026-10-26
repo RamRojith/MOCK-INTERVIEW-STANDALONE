@@ -6,8 +6,9 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 
-def _dummy_mode():
-    return bool(settings.MOCK_INTERVIEW.get("DUMMY_MODE", False))
+def _dummy_stt():
+    config = settings.MOCK_INTERVIEW
+    return bool(config.get("DUMMY_STT", config.get("DUMMY_MODE", False)))
 
 
 class MockInterviewConfig(AppConfig):
@@ -15,13 +16,11 @@ class MockInterviewConfig(AppConfig):
     name = 'mock_interview'
 
     def ready(self):
-        if _dummy_mode():
-            # DUMMY_MODE runs fully offline: the Whisper model is never loaded
-            # (STT is stubbed) but the background worker still runs so that
-            # evaluations/reports are produced from the deterministic
-            # fallbacks and the site behaves like the real one end-to-end.
+        if _dummy_stt():
+            # The canned transcript keeps the site usable with no Whisper
+            # install; the background worker still runs either way.
             logger.info(
-                "Mock interview DUMMY_MODE enabled: skipping Whisper pre-load."
+                "STT dummy mode enabled: skipping Whisper pre-load."
             )
         else:
             from mock_interview.speech.stt import preload_whisper_model
