@@ -87,6 +87,68 @@ REPORT_SCHEMA = {
             "type": "object",
             "additionalProperties": {"type": "string"},
         },
+        "fix_this_first": {
+            "type": "object",
+            "properties": {
+                "readiness": {"type": "string"},
+                "readiness_reason": {"type": "string"},
+                "biggest_leak": {"type": "string"},
+                "drill_title": {"type": "string"},
+                "thirty_min_plan": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["readiness", "readiness_reason", "biggest_leak"],
+        },
+        "competency_breakdown": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "level": {"type": "string"},
+                    "evidence": {"type": "array", "items": {"type": "string"}},
+                    "gap_vs_role": {"type": "string"},
+                    "fix": {"type": "string"},
+                },
+                "required": ["name", "level"],
+            },
+        },
+        "seven_day_plan": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "day": {"type": "string"},
+                    "focus": {"type": "string"},
+                    "time": {"type": "string"},
+                    "task": {"type": "string"},
+                },
+                "required": ["day", "focus", "task"],
+            },
+        },
+        "communication_intelligence": {
+            "type": "object",
+            "properties": {
+                "structure": {"type": "string"},
+                "clarity": {"type": "string"},
+                "fillers": {"type": "string"},
+                "pacing": {"type": "string"},
+                "examples_ownership": {"type": "string"},
+                "vocab": {"type": "string"},
+            },
+        },
+        "ready_for_next": {
+            "type": "object",
+            "properties": {
+                "verdict": {"type": "string"},
+                "must_fix": {"type": "array", "items": {"type": "string"}},
+                "nice_to_fix": {"type": "array", "items": {"type": "string"}},
+                "cheat_card": {"type": "array", "items": {"type": "string"}},
+                "personal_question_bank": {"type": "array", "items": {"type": "string"}},
+            },
+        },
     },
     "required": ["summary", "strengths", "improvement_areas", "learning_plan"],
 }

@@ -9,6 +9,43 @@
     {% endif %}
     <p class="small text-muted">AI feedback is practice guidance and not a placement or hiring decision.</p>
 </div>
+
+{% with fix=report.fix_this_first %}
+{% if fix and fix.biggest_leak %}
+<div class="content-card mb-4 border border-warning">
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+        <div>
+            <h4 class="fw-bold mb-1"><i class="fas fa-bullseye text-warning me-2"></i>Fix This First</h4>
+            <p class="mb-0">Do this before anything else — highest ROI for your next interview.</p>
+        </div>
+        <span class="badge bg-{% if fix.readiness == 'Interview Ready' %}success{% elif fix.readiness == 'Almost Ready' %}warning{% else %}danger{% endif %} fs-6">{{ fix.readiness|default:"Needs Focus" }}</span>
+    </div>
+    <hr>
+    <div class="row g-3">
+        <div class="col-lg-7">
+            <h6 class="fw-bold">Biggest Leak</h6>
+            <p>{{ fix.biggest_leak }}</p>
+            {% if fix.readiness_reason %}
+            <p class="small text-muted mb-0">{{ fix.readiness_reason }}</p>
+            {% endif %}
+        </div>
+        <div class="col-lg-5">
+            <h6 class="fw-bold">30-Minute Plan</h6>
+            <ol class="mb-0">
+                {% if fix.thirty_min_plan %}
+                    {% for step in fix.thirty_min_plan %}<li>{{ step }}</li>{% endfor %}
+                {% else %}
+                    <li>Do 1 drill for the biggest leak (10 min)</li>
+                    <li>Rewrite 1 answer using structure (10 min)</li>
+                    <li>Speak aloud with pauses (10 min)</li>
+                {% endif %}
+            </ol>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endwith %}
+
 <div class="row g-3 mb-4 text-center">
     {% with round_lower=session.interview_round|lower %}
     {% if "behavio" in round_lower or "hr" in round_lower %}
@@ -66,6 +103,52 @@
             <h5 class="fw-bold">Summary</h5>
             <p class="mb-0">{{ report.summary }}</p>
         </div>
+
+        {% with comps=report.competency_breakdown %}
+        {% if comps %}
+        <div class="content-card mb-4">
+            <h5 class="fw-bold mb-1"><i class="fas fa-chart-bar me-2"></i>Role-Mapped Competency Breakdown</h5>
+            <p class="small text-muted mb-3">Mapped to {{ session.role }} and this {{ session.interview_round }} round.</p>
+            <div class="row g-3">
+                {% for c in comps %}
+                <div class="col-md-6">
+                    <div class="border rounded h-100 p-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h6 class="fw-bold mb-0">{{ c.name }}</h6>
+                            <span class="badge bg-secondary">{{ c.level|default:"Developing" }}</span>
+                        </div>
+                        {% if c.gap_vs_role %}<p class="small mb-2"><strong>Gap vs role:</strong> {{ c.gap_vs_role }}</p>{% endif %}
+                        {% if c.evidence %}<p class="small mb-1 fw-semibold">Evidence</p><ul class="small mb-2">{% for e in c.evidence %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+                        {% if c.fix %}<p class="small mb-0"><strong>Fix:</strong> {{ c.fix }}</p>{% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        {% with comm=report.communication_intelligence %}
+        {% if comm and comm|length > 0 %}
+        <div class="content-card mb-4">
+            <h5 class="fw-bold mb-1"><i class="fas fa-comments me-2"></i>Communication Intelligence</h5>
+            <p class="small text-muted mb-3">Small tweaks that make a big difference in delivery.</p>
+            <div class="row g-2 small">
+                {% if comm.structure %}<div class="col-md-6"><div class="border rounded p-2"><strong>Structure:</strong> {{ comm.structure }}</div></div>{% endif %}
+                {% if comm.clarity %}<div class="col-md-6"><div class="border rounded p-2"><strong>Clarity & Conciseness:</strong> {{ comm.clarity }}</div></div>{% endif %}
+                {% if comm.fillers %}<div class="col-md-6"><div class="border rounded p-2"><strong>Fillers:</strong> {{ comm.fillers }}</div></div>{% endif %}
+                {% if comm.pacing %}<div class="col-md-6"><div class="border rounded p-2"><strong>Pacing:</strong> {{ comm.pacing }}</div></div>{% endif %}
+                {% if comm.examples_ownership %}<div class="col-md-6"><div class="border rounded p-2"><strong>Examples & Ownership:</strong> {{ comm.examples_ownership }}</div></div>{% endif %}
+                {% if comm.vocab %}<div class="col-md-6"><div class="border rounded p-2"><strong>Vocabulary Fit:</strong> {{ comm.vocab }}</div></div>{% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <div class="content-card mb-4">
+            <h5 class="fw-bold mb-1"><i class="fas fa-microscope me-2"></i>Answer-by-Answer Coaching Lab</h5>
+            <p class="small text-muted mb-3">Use your exact transcript as evidence. Rewrite and practice.</p>
+        </div>
         <div class="accordion" id="questionAnalysis">
             {% for question in questions %}
             <div class="accordion-item mb-3 border rounded">
@@ -77,16 +160,27 @@
                 </h2>
                 <div id="q{{ question.pk }}" class="accordion-collapse collapse {% if forloop.first %}show{% endif %}" data-bs-parent="#questionAnalysis">
                     <div class="accordion-body">
-                        <h6 class="fw-bold">Student-confirmed transcript</h6>
+                        <h6 class="fw-bold">Question Goal</h6>
+                        <p class="small text-muted">This question checks skills relevant to {{ session.role }} in a {{ session.interview_round }} round.</p>
+                        <h6 class="fw-bold">Your Answer (Transcript)</h6>
                         <p class="bg-light p-3 rounded">{{ question.answer.corrected_transcript }}</p>
                         {% if question.answer.transcript_changed %}<p class="small text-muted">The student reviewed and changed the original STT transcript.</p>{% endif %}
                         <h6 class="fw-bold">Dimension scores</h6>
                         <ul>{% for name, score in question.answer.evaluation.dimension_scores.items %}<li>{{ name|title }}: {{ score }}/10</li>{% endfor %}</ul>
-                        <h6 class="fw-bold text-success">Strengths</h6>
+                        <h6 class="fw-bold text-success">What You Did Well</h6>
                         <ul>{% for item in question.answer.evaluation.strengths %}<li>{{ item }}</li>{% empty %}<li>No specific strength returned.</li>{% endfor %}</ul>
-                        <h6 class="fw-bold text-danger">Improvements</h6>
+                        <h6 class="fw-bold text-danger">What To Improve</h6>
                         <ul>{% for item in question.answer.evaluation.improvement_actions %}<li>{{ item }}</li>{% empty %}<li>No specific improvement returned.</li>{% endfor %}</ul>
-                        {% if question.answer.evaluation.improved_answer %}<h6 class="fw-bold">Improved answer</h6><p>{{ question.answer.evaluation.improved_answer }}</p>{% endif %}
+                        {% if question.answer.evaluation.improved_answer %}
+                        <h6 class="fw-bold">Stronger Version (Rewrite)</h6>
+                        <p class="bg-success bg-opacity-10 p-3 rounded">{{ question.answer.evaluation.improved_answer }}</p>
+                        <p class="small text-muted">Keep your original facts. Focus on structure, ownership (I), and a concrete result/impact.</p>
+                        {% endif %}
+                        <h6 class="fw-bold">Coach Tip & Practice Prompt</h6>
+                        <ul class="mb-0">
+                            <li>Coach Tip: Pick one specific moment from your transcript and tighten it using the stronger version as a guide.</li>
+                            <li>Practice Prompt: Re-attempt this exact question aloud, but lead with the outcome/result first, then explain how you got there.</li>
+                        </ul>
                     </div>
                 </div>
             </div>
@@ -94,6 +188,47 @@
         </div>
     </div>
     <div class="col-lg-4">
+        {% with ready=report.ready_for_next %}
+        {% if ready and ready.verdict %}
+        <div class="content-card mb-4 border border-info">
+            <h5 class="fw-bold"><i class="fas fa-flag-checkered me-2"></i>Ready for Next Interview?</h5>
+            <p class="mb-2">{{ ready.verdict }}</p>
+            {% if ready.must_fix %}
+            <h6 class="fw-bold text-danger mt-2">Must-Fix Before Next Interview</h6>
+            <ul class="small">{% for item in ready.must_fix %}<li>{{ item }}</li>{% endfor %}</ul>
+            {% endif %}
+            {% if ready.nice_to_fix %}
+            <h6 class="fw-bold text-muted mt-2">Nice-to-Fix Later</h6>
+            <ul class="small">{% for item in ready.nice_to_fix %}<li>{{ item }}</li>{% endfor %}</ul>
+            {% endif %}
+            {% if ready.cheat_card %}
+            <h6 class="fw-bold mt-2">Pre-Interview Cheat Card</h6>
+            <ul class="small">{% for item in ready.cheat_card %}<li>{{ item }}</li>{% endfor %}</ul>
+            {% endif %}
+            {% if ready.personal_question_bank %}
+            <h6 class="fw-bold mt-2">Your Personal Question Bank</h6>
+            <ul class="small">{% for item in ready.personal_question_bank %}<li>{{ item }}</li>{% endfor %}</ul>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        {% with plan7=report.seven_day_plan %}
+        {% if plan7 %}
+        <div class="content-card mb-4">
+            <h5 class="fw-bold"><i class="fas fa-calendar-alt me-2"></i>Personalized 7-Day Action Plan</h5>
+            <div class="small">
+                {% for p in plan7 %}
+                <div class="border-bottom py-2">
+                    <div class="d-flex justify-content-between"><strong>{{ p.day }}</strong><span class="text-muted">{{ p.time }}</span></div>
+                    <div><span class="text-primary">{{ p.focus }}</span> — {{ p.task }}</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+        {% endwith %}
+
         <div class="content-card mb-4">
             <h5 class="fw-bold text-success">Strengths</h5>
             <ul>{% for item in report.strengths %}<li>{{ item }}</li>{% empty %}<li>Complete more answers to build this section.</li>{% endfor %}</ul>

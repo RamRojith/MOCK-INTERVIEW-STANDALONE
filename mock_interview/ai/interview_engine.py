@@ -161,6 +161,7 @@ def normalize_resume(text):
         RESUME_PROFILE_SCHEMA,
         temperature=0,
         max_output_tokens=512,
+        role="interactive",
     )
     return {
         key: _clean_string_list(result.get(key), limit=20)
@@ -293,8 +294,15 @@ def generate_question(session, sequence_number, previous_answer=""):
             QUESTION_SCHEMA,
             temperature=0.35,
             max_output_tokens=512,
+            role="question",
         )
-        question_data = _question_data_from_result(result, configured_model())
+        try:
+            from mock_interview.ai import ollama_client
+
+            qmodel = ollama_client.last_used_model() or configured_model("interactive")
+        except Exception:
+            qmodel = configured_model("interactive")
+        question_data = _question_data_from_result(result, qmodel)
         actual_category = canonical_question_type(
             question_data["question_type"]
         )
@@ -537,8 +545,14 @@ def evaluate_answer(question, answer, document_id=""):
             temperature=0.1,
             context_tokens=3072,
             max_output_tokens=384,
+            role="evaluation",
         )
-        model_name = configured_model()
+        try:
+            from mock_interview.ai import ollama_client
+
+            model_name = ollama_client.last_used_model() or configured_model("interactive")
+        except Exception:
+            model_name = configured_model("interactive")
     except LocalModelError:
         if not settings.MOCK_INTERVIEW.get("ALLOW_DETERMINISTIC_FALLBACK", True):
             raise
@@ -735,8 +749,14 @@ def evaluate_answer_and_generate_question(question, answer, sequence_number, doc
             temperature=0.15,
             context_tokens=3072,
             max_output_tokens=384,
+            role="interactive",
         )
-        model_name = configured_model()
+        try:
+            from mock_interview.ai import ollama_client
+
+            model_name = ollama_client.last_used_model() or configured_model("interactive")
+        except Exception:
+            model_name = configured_model("interactive")
         evaluation = _evaluation_data_from_result(
             question,
             result.get("evaluation", {}),
@@ -796,15 +816,16 @@ def evaluate_answer_and_generate_question(question, answer, sequence_number, doc
 
 _ROUND_REPORT_PROMPTS = {
     "technical": (
-        "You are a senior technical interviewer writing a coaching report for a "
-        "college student. Focus your analysis on: technical accuracy and depth of "
-        "knowledge, problem-solving approach and algorithmic thinking, code or "
-        "design quality, completeness of the answer, and practical examples. "
-        "The summary must reference specific technical concepts the student "
-        "demonstrated or missed. Strengths should highlight concrete technical "
-        "skills shown. Improvement areas must name specific technical topics "
-        "to study. The learning plan should include actionable technical practice "
-        "steps. Do not make hiring or employability decisions."
+        "You are a senior technical interviewer acting as a PERSONAL COACH for a "
+        "college student. Turn feedback into a coaching system, not a marksheet. "
+        "Use ONLY the submitted answers, transcripts, evaluations, JD/role context. "
+        "Scores are final and must not be changed. Focus on: biggest leak first "
+        "(high ROI), answer-by-answer coaching with evidence from transcripts, "
+        "concrete stronger rewrites keeping student's experience intact, role-mapped "
+        "competency breakdown, communication intelligence, a pragmatic 7-day action "
+        "plan, readiness verdict with must/nice-to-fix, pre-interview cheat card, "
+        "and a personal question bank from weak areas. Be specific with quotes and "
+        "micro-drills (10-20 min). Do not make hiring or employability decisions."
     ),
     "hr": (
         "You are a senior HR interviewer writing a coaching report for a "
@@ -872,10 +893,12 @@ _ROUND_REPORT_PROMPTS = {
 }
 
 _DEFAULT_REPORT_PROMPT = (
-    "Write a concise coaching report using only the validated evaluation "
-    "data. Scores are final and must not be changed. Tailor the report to "
-    "the interview type and role. Do not make hiring or employability "
-    "decisions."
+    "Act as a personal interview coach. Convert this into actionable coaching "
+    "using ONLY validated evaluation data. Scores are final and must not be "
+    "changed. Tailor to role and round. Prioritize top 1-2 fixes, show concrete "
+    "rewrites, give micro-drills, role-mapped competencies, 7-day plan, "
+    "readiness verdict, cheat card, and personal question bank. Do not make "
+    "hiring or employability decisions."
 )
 
 
@@ -925,10 +948,20 @@ def generate_report_text(
                     "role": session.role,
                     "round": session.interview_round,
                     "interview_round_type": round_key,
+                    "job_description": getattr(session, "job_description", "") or "",
+                    "company_name": getattr(session, "company_name", "") or "",
                     "overall_score": overall_score,
                     "dimension_averages": dim_averages,
                     "evaluations": evaluation_rows,
                     "information_graph_insights": information_graph or {},
+                    "instruction": (
+                        "Return a personalized coaching report in the required schema. "
+                        "Pick exactly 1 biggest leak, give a 30-min plan, rewrite weak answers "
+                        "using STAR where behavioral, keep original story, give role-mapped "
+                        "competencies, communication intelligence, 7-day plan, readiness "
+                        "with must/nice-to-fix, cheat card, and personal question bank from "
+                        "weak areas. Use only provided data."
+                    ),
                 },
                 ensure_ascii=False,
                 default=str,
@@ -942,25 +975,74 @@ def generate_report_text(
             temperature=0.2,
             model=configured_model("report"),
             context_tokens=4096,
-            max_output_tokens=512,
+            max_output_tokens=1024,
+            role="report",
         )
-        model_name = configured_model("report")
+        try:
+            from mock_interview.ai import ollama_client
+
+            model_name = ollama_client.last_used_model() or configured_model("report")
+        except Exception:
+            model_name = configured_model("report")
     except LocalModelError:
         strengths = []
         improvements = []
         for row in evaluation_rows:
-            strengths.extend(row.get("strengths", []))
-            improvements.extend(row.get("improvement_actions", []))
+            strengths.extend(row.get("strengths", []) or [])
+            improvements.extend(row.get("improvement_actions", []) or [])
+        # Pick biggest leak as first concrete improvement action
+        biggest_leak = improvements[0] if improvements else "Focus on giving specific examples with measurable outcomes."
         result = {
             "summary": (
                 f"You completed a {session.interview_round} practice interview "
-                f"for {session.role} with an overall score of {overall_score:.1f}."
+                f"for {session.role} with an overall score of {overall_score:.1f}. "
+                f"Focus first on: {biggest_leak}"
             ),
-            "strengths": strengths[:5],
-            "improvement_areas": improvements[:5],
-            "learning_plan": improvements[:5],
+            "strengths": _clean_string_list(strengths, limit=5),
+            "improvement_areas": _clean_string_list(improvements, limit=8),
+            "learning_plan": _clean_string_list(improvements, limit=7),
+            "fix_this_first": {
+                "readiness": "Needs Focus" if overall_score < 70 else "Almost Ready" if overall_score < 85 else "Interview Ready",
+                "readiness_reason": f"Overall {overall_score:.1f}/100. Biggest leak: {biggest_leak}",
+                "biggest_leak": biggest_leak,
+                "drill_title": "Fix in 10-20 minutes",
+                "thirty_min_plan": [
+                    "Do 1 drill for the biggest leak (10 min) - rewrite the weakest answer aloud",
+                    "Rewrite 1 answer using STAR/structure (10 min) - keep original facts",
+                    "Speak it once with pauses, cut fillers (10 min)",
+                ],
+            },
+            "competency_breakdown": [],
+            "seven_day_plan": [
+                {"day": "Day 1 - Quick Win", "focus": "Biggest leak", "time": "15-20 min", "task": f"Practice fixing: {biggest_leak}"},
+                {"day": "Day 2 - Behavioral", "focus": "STAR structure", "time": "20-30 min", "task": "Pick 2 behavioral answers, use STAR (S,T,A,R) with a result."},
+                {"day": "Day 3 - Role-Specific", "focus": "Role competency", "time": "25-40 min", "task": f"Practice role-relevant questions for {session.role}."},
+                {"day": "Day 4 - Clarity", "focus": "Cut fluff/fillers", "time": "10-15 min", "task": "Re-record 1 answer, pause instead of fillers."},
+                {"day": "Day 5 - Impact", "focus": "Quantify outcomes", "time": "15-20 min", "task": "Add numbers/outcomes to a project/work answer even if approximate."},
+                {"day": "Day 6 - Mock Lite", "focus": "Mix weak areas", "time": "25-35 min", "task": "Do 3 questions mixing your top 2 gaps."},
+                {"day": "Day 7 - Test & Review", "focus": "Self-check", "time": "10-15 min", "task": "Re-attempt your worst answer and compare to stronger version."},
+            ],
+            "communication_intelligence": {
+                "structure": "Use STAR for behavioral; PEEL/clear structure for technical.",
+                "clarity": "Be specific and concise; say 'I' with context.",
+                "fillers": "Pause for 2 seconds instead of saying um/uh/like.",
+                "pacing": "Aim for measured pace; avoid rushing under nerves.",
+                "examples_ownership": "Distinguish 'we' vs 'I' and show your contribution.",
+                "vocab": "Use natural, role-appropriate phrasing.",
+            },
+            "ready_for_next": {
+                "verdict": "Focus only on Day 1-2 before your next interview.",
+                "must_fix": [biggest_leak][:2],
+                "nice_to_fix": _clean_string_list(improvements, limit=3)[1:4] if len(improvements)>1 else [],
+                "cheat_card": ["Structure: STAR/clear structure", "Speak to impact: include result/metric", "Pause, don't fill - stay concise"],
+                "personal_question_bank": [
+                    f"Tell me about a time related to your biggest gap for a {session.role} role.",
+                    f"Describe a specific example showing impact relevant to {session.role}.",
+                    f"How would you handle a challenge similar to one you struggled with?",
+                ],
+            },
         }
-        model_name = "deterministic-fallback"
+        model_name = "deterministic-fallback-coach"
     swot_analysis = generate_swot_analysis(
         session,
         evaluation_rows,
@@ -980,6 +1062,11 @@ def generate_report_text(
         "dimension_analysis": result.get("dimension_analysis") or {},
         "swot_analysis": swot_analysis,
         "model_name": model_name,
+        "fix_this_first": result.get("fix_this_first") or {},
+        "competency_breakdown": result.get("competency_breakdown") or [],
+        "seven_day_plan": result.get("seven_day_plan") or [],
+        "communication_intelligence": result.get("communication_intelligence") or {},
+        "ready_for_next": result.get("ready_for_next") or {},
     }
 
 
@@ -1194,6 +1281,7 @@ def generate_swot_analysis(
             model=configured_model("report"),
             context_tokens=4096,
             max_output_tokens=512,
+            role="report",
         )
     except LocalModelError:
         return _deterministic_swot(candidates)

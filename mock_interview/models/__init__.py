@@ -247,6 +247,13 @@ class InterviewReport(models.Model):
     # evaluation data in ai/interview_engine.generate_swot_analysis.
     swot_analysis = models.JSONField(default=dict, blank=True)
     information_graph = models.JSONField(default=dict, blank=True)
+    # Coaching system additions
+    fix_this_first = models.JSONField(default=dict, blank=True)
+    competency_breakdown = models.JSONField(default=list, blank=True)
+    seven_day_plan = models.JSONField(default=list, blank=True)
+    communication_intelligence = models.JSONField(default=dict, blank=True)
+    ready_for_next = models.JSONField(default=dict, blank=True)
+    answer_coaching = models.JSONField(default=list, blank=True)
     model_name = models.CharField(max_length=100, blank=True)
     pdf_file = models.FileField(
         upload_to="mock_interview/reports/%Y/%m/",

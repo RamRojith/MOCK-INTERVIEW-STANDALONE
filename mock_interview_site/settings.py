@@ -138,6 +138,29 @@ MOCK_INTERVIEW = {
     "OLLAMA_REPORT_MODEL": os.environ.get(
         "MOCK_INTERVIEW_OLLAMA_REPORT_MODEL", "qwen3:1.7b"
     ),
+    # LLM routing (model failover) per capability. Comma-separated list of
+    # backup models tried in order if primary fails/times out/returns invalid schema.
+    # Keep empty to disable routing and use existing behavior.
+    "LLM_ROUTE_QUESTION": os.environ.get(
+        "MOCK_INTERVIEW_LLM_ROUTE_QUESTION",
+        "qwen2.5:7b-instruct,llama-3.1:8b,mistral:7b-instruct",
+    ),
+    "LLM_ROUTE_INTERACTIVE": os.environ.get(
+        "MOCK_INTERVIEW_LLM_ROUTE_INTERACTIVE",
+        "qwen2.5:7b-instruct,llama-3.1:8b,mistral:7b-instruct",
+    ),
+    "LLM_ROUTE_EVALUATION": os.environ.get(
+        "MOCK_INTERVIEW_LLM_ROUTE_EVALUATION",
+        "qwen2.5:7b-instruct,llama-3.1:8b,mistral:7b-instruct",
+    ),
+    "LLM_ROUTE_REPORT": os.environ.get(
+        "MOCK_INTERVIEW_LLM_ROUTE_REPORT",
+        "qwen3:8b,qwen2.5:7b-instruct,llama-3.1:8b",
+    ),
+    "LLM_ROUTE_DEFAULT": os.environ.get(
+        "MOCK_INTERVIEW_LLM_ROUTE_DEFAULT",
+        "qwen2.5:7b-instruct,llama-3.1:8b",
+    ),
     "OLLAMA_TIMEOUT": float(os.environ.get("MOCK_INTERVIEW_OLLAMA_TIMEOUT", "120")),
     "OLLAMA_CONTEXT_TOKENS": int(
         os.environ.get("MOCK_INTERVIEW_OLLAMA_CONTEXT_TOKENS", "4096")

@@ -1,9 +1,17 @@
 import json
+import logging
+import time
+from contextvars import ContextVar
 
 import requests
 from django.conf import settings
 
 from mock_interview.ai.schemas import RESUME_PROFILE_SCHEMA
+
+logger = logging.getLogger(__name__)
+
+# Request-scoped metadata for concurrency safety
+_request_model_meta: ContextVar = ContextVar("ollama_request_model_meta", default=None)
 
 
 class LocalModelError(RuntimeError):
@@ -12,6 +20,69 @@ class LocalModelError(RuntimeError):
 
 def _dummy_mode():
     return bool(settings.MOCK_INTERVIEW.get("DUMMY_MODE", False))
+
+
+def last_used_model():
+    meta = _request_model_meta.get()
+    if isinstance(meta, dict):
+        return meta.get("successful_model")
+    return None
+
+
+def get_last_request_meta():
+    meta = _request_model_meta.get()
+    if isinstance(meta, dict):
+        return dict(meta)
+    return {}
+
+
+def _set_request_meta(meta):
+    try:
+        _request_model_meta.set(meta)
+    except Exception:
+        pass
+
+
+def _parse_route_list(value):
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        items = value
+    else:
+        items = str(value).split(",")
+    result = []
+    for item in items:
+        name = str(item).strip()
+        if name and name not in result:
+            result.append(name)
+    return result
+
+
+def _get_route_candidates(role=None, primary_model=None):
+    cfg = getattr(settings, "MOCK_INTERVIEW", {}) or {}
+    role = (role or "").strip().lower()
+    primary_model = primary_model or configured_model(role or "interactive")
+    candidates = []
+    if primary_model:
+        candidates.append(primary_model)
+    route_key = None
+    if role == "report":
+        route_key = "LLM_ROUTE_REPORT"
+    elif role in ("interactive", "question", "questions"):
+        route_key = "LLM_ROUTE_INTERACTIVE"
+    elif role in ("evaluation", "eval", "evaluate"):
+        route_key = "LLM_ROUTE_EVALUATION"
+    elif role == "question":
+        route_key = "LLM_ROUTE_QUESTION"
+    if route_key and route_key in cfg:
+        for m in _parse_route_list(cfg.get(route_key)):
+            if m and m not in candidates:
+                candidates.append(m)
+    if len(candidates) == 1:
+        for m in _parse_route_list(cfg.get("LLM_ROUTE_DEFAULT")):
+            if m and m not in candidates:
+                candidates.append(m)
+    return candidates
 
 
 # In DUMMY_MODE every model call is served from the app's deterministic
@@ -64,6 +135,76 @@ def _api_url():
     return f"{base_url}/api/chat", "ollama"
 
 
+def _validate_schema(parsed, schema):
+    if schema is None:
+        return True
+    if not isinstance(parsed, dict):
+        return False
+    try:
+        required = schema.get("required") or []
+        for key in required:
+            if key not in parsed:
+                return False
+        return True
+    except Exception:
+        return isinstance(parsed, dict)
+
+
+def _classify_error(exc):
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "timeout"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "connection_error"
+    if isinstance(exc, requests.exceptions.HTTPError):
+        resp = getattr(exc, "response", None)
+        status = getattr(resp, "status_code", None)
+        if status and status >= 500:
+            return "server_error"
+        if status == 404:
+            return "model_unavailable"
+        return "http_error"
+    if isinstance(exc, json.JSONDecodeError):
+        return "invalid_json"
+    if isinstance(exc, KeyError):
+        return "missing_fields"
+    if isinstance(exc, TypeError):
+        return "type_error"
+    if isinstance(exc, LocalModelError):
+        msg = str(exc)
+        if "schema" in msg.lower():
+            return "schema_invalid"
+        if "json object" in msg.lower():
+            return "invalid_json"
+        return "local_model_error"
+    return exc.__class__.__name__.lower()
+
+
+def _is_retryable_error(exc):
+    # Do not swallow programming bugs / malformed requests
+    if isinstance(exc, (SyntaxError, AttributeError, ValueError)) and not isinstance(exc, (json.JSONDecodeError,)):
+        # Only retry if clearly model/output related
+        pass
+    category = _classify_error(exc)
+    retryable = {
+        "timeout",
+        "connection_error",
+        "server_error",
+        "model_unavailable",
+        "http_error",
+        "invalid_json",
+        "missing_fields",
+        "type_error",
+        "schema_invalid",
+        "local_model_error",
+    }
+    # Be conservative: don't retry arbitrary ValueError not from model output
+    if isinstance(exc, ValueError) and not isinstance(exc, json.JSONDecodeError):
+        return False
+    if isinstance(exc, (SyntaxError, AttributeError)):
+        return False
+    return category in retryable
+
+
 def chat_json(
     messages,
     schema,
@@ -73,6 +214,7 @@ def chat_json(
     model=None,
     context_tokens=None,
     max_output_tokens=None,
+    role=None,
 ):
     if _dummy_mode():
         if schema is RESUME_PROFILE_SCHEMA:
@@ -82,51 +224,135 @@ def chat_json(
         )
 
     url, api_style = _api_url()
-    model = model or configured_model()
     timeout = timeout or float(settings.MOCK_INTERVIEW.get("OLLAMA_TIMEOUT", 120))
+    primary = model or configured_model(role or "interactive")
+    candidates = _get_route_candidates(role=role, primary_model=primary)
+    if not candidates:
+        candidates = [primary] if primary else [configured_model(role or "interactive")]
 
-    if api_style == "ollama":
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "think": settings.MOCK_INTERVIEW.get("OLLAMA_THINK", "false")
-            if isinstance(settings.MOCK_INTERVIEW.get("OLLAMA_THINK"), bool)
-            else str(settings.MOCK_INTERVIEW.get("OLLAMA_THINK", "false")).lower()
-            in {"1", "true", "yes"},
-            "format": schema,
-            "options": {
-                "temperature": temperature,
-                "num_ctx": context_tokens
-                or settings.MOCK_INTERVIEW.get("OLLAMA_CONTEXT_TOKENS", 4096),
-                "num_predict": max_output_tokens
-                or settings.MOCK_INTERVIEW.get("OLLAMA_MAX_OUTPUT_TOKENS", 1024),
-            },
-        }
-    else:
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "temperature": temperature,
-            "response_format": {"type": "json_object"},
-        }
+    meta = {
+        "role": role or "unknown",
+        "primary_model": primary,
+        "attempts": [],
+        "successful_model": None,
+        "fallback_used": False,
+        "total_latency_ms": 0,
+    }
+    _set_request_meta(meta)
 
-    try:
-        response = requests.post(url, json=payload, timeout=timeout)
-        response.raise_for_status()
-        body = response.json()
+    last_error = None
+    overall_start = time.monotonic()
+    for idx, candidate in enumerate(candidates):
         if api_style == "ollama":
-            content = body["message"]["content"]
+            payload = {
+                "model": candidate,
+                "messages": messages,
+                "stream": False,
+                "think": settings.MOCK_INTERVIEW.get("OLLAMA_THINK", "false")
+                if isinstance(settings.MOCK_INTERVIEW.get("OLLAMA_THINK"), bool)
+                else str(settings.MOCK_INTERVIEW.get("OLLAMA_THINK", "false")).lower()
+                in {"1", "true", "yes"},
+                "format": schema,
+                "options": {
+                    "temperature": temperature,
+                    "num_ctx": context_tokens
+                    or settings.MOCK_INTERVIEW.get("OLLAMA_CONTEXT_TOKENS", 4096),
+                    "num_predict": max_output_tokens
+                    or settings.MOCK_INTERVIEW.get("OLLAMA_MAX_OUTPUT_TOKENS", 1024),
+                },
+            }
         else:
-            content = body["choices"][0]["message"]["content"]
-        parsed = json.loads(content) if isinstance(content, str) else content
-    except (requests.RequestException, KeyError, TypeError, json.JSONDecodeError) as exc:
-        raise LocalModelError(f"Local model request failed: {exc}") from exc
-
-    if not isinstance(parsed, dict):
-        raise LocalModelError("Local model did not return a JSON object.")
-    return parsed
+            payload = {
+                "model": candidate,
+                "messages": messages,
+                "stream": False,
+                "temperature": temperature,
+                "response_format": {"type": "json_object"},
+            }
+        attempt_start = time.monotonic()
+        try:
+            response = requests.post(url, json=payload, timeout=timeout)
+            response.raise_for_status()
+            body = response.json()
+            if api_style == "ollama":
+                content = body["message"]["content"]
+            else:
+                content = body["choices"][0]["message"]["content"]
+            parsed = json.loads(content) if isinstance(content, str) else content
+            if not isinstance(parsed, dict):
+                raise LocalModelError("Local model did not return a JSON object.")
+            if not _validate_schema(parsed, schema):
+                raise LocalModelError("Local model response failed schema validation.")
+            attempt_ms = int((time.monotonic() - attempt_start) * 1000)
+            meta["attempts"].append(
+                {
+                    "model": candidate,
+                    "ok": True,
+                    "latency_ms": attempt_ms,
+                    "error_category": None,
+                }
+            )
+            meta["successful_model"] = candidate
+            meta["fallback_used"] = idx > 0
+            meta["total_latency_ms"] = int((time.monotonic() - overall_start) * 1000)
+            _set_request_meta(meta)
+            if idx > 0 and role:
+                logger.info(
+                    "LLM route: task=%s primary=%s failed, backup=%s succeeded (latency_ms=%s)",
+                    role,
+                    primary,
+                    candidate,
+                    attempt_ms,
+                )
+            elif role:
+                logger.debug(
+                    "LLM route: task=%s primary=%s succeeded (latency_ms=%s)",
+                    role,
+                    candidate,
+                    attempt_ms,
+                )
+            return parsed
+        except Exception as exc:
+            attempt_ms = int((time.monotonic() - attempt_start) * 1000)
+            cat = _classify_error(exc)
+            meta["attempts"].append(
+                {
+                    "model": candidate,
+                    "ok": False,
+                    "latency_ms": attempt_ms,
+                    "error_category": cat,
+                }
+            )
+            _set_request_meta(meta)
+            last_error = exc
+            if not _is_retryable_error(exc):
+                logger.error(
+                    "LLM route: non-retryable error for task=%s model=%s category=%s",
+                    role,
+                    candidate,
+                    cat,
+                )
+                break
+            if idx == 0 and len(candidates) > 1 and role:
+                logger.warning(
+                    "LLM route: task=%s primary=%s failed category=%s, trying backup",
+                    role,
+                    candidate,
+                    cat,
+                )
+            elif role and len(candidates) > 1:
+                logger.warning(
+                    "LLM route: task=%s model=%s failed category=%s, trying next backup",
+                    role,
+                    candidate,
+                    cat,
+                )
+            continue
+    meta["total_latency_ms"] = int((time.monotonic() - overall_start) * 1000)
+    _set_request_meta(meta)
+    if last_error is not None:
+        raise LocalModelError(f"Local model request failed: {last_error}") from last_error
+    raise LocalModelError("Local model request failed.")
 
 
 def health():

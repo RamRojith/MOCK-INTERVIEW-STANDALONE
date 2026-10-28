@@ -804,7 +804,13 @@ def finish_interview(session):
                     "technical_score": Decimal(str(round(technical, 2))),
                     "communication_score": Decimal(str(round(communication, 2))),
                     "information_graph": information_graph,
-                    **report_text,
+                    "answer_coaching": report_text.get("answer_coaching") or [],
+                    "communication_intelligence": report_text.get("communication_intelligence") or {},
+                    "competency_breakdown": report_text.get("competency_breakdown") or [],
+                    "fix_this_first": report_text.get("fix_this_first") or {},
+                    "ready_for_next": report_text.get("ready_for_next") or {},
+                    "seven_day_plan": report_text.get("seven_day_plan") or [],
+                    **{k: v for k, v in report_text.items() if k not in ("answer_coaching", "communication_intelligence", "competency_breakdown", "fix_this_first", "ready_for_next", "seven_day_plan")},
                 },
             )
             _generate_report_pdf(report)
