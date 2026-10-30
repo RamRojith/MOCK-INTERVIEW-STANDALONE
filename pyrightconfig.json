@@ -1,0 +1,13 @@
+{
+    "venvPath": ".",
+    "venv": "venv",
+    "extraPaths": [
+        "venv/Lib/site-packages"
+    ],
+    "include": [
+        "mock_interview",
+        "mock_interview_site",
+        "user_accounts",
+        "faculty_management"
+    ]
+}

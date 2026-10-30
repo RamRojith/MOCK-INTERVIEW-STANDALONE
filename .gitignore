@@ -20,3 +20,6 @@ media/
 staticfiles/
 *.sqlite3
 db.sqlite3
+
+# Large local speech model assets are installed per machine, not committed.
+mock_interview/model_data/

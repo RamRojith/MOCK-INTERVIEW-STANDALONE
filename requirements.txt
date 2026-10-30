@@ -10,9 +10,13 @@ numpy>=1.26
 
 # ── Optional: only needed when MOCK_INTERVIEW_DUMMY_MODE=false ──────────────
 # Local LLM (Ollama is a separate service; no Python package required)
-# faster-whisper>=1.0        # real speech-to-text: pip install faster-whisper
-# kokoro-onnx>=0.6.1         # real text-to-speech (pulls in onnxruntime,
-#                            # phonemizer and espeakng-loader)
-# soundfile>=0.13            # writes the synthesized PCM audio as WAV
+# Local voice runtime. PyAV 19 removed an argument still used by the current
+# Faster-Whisper release, so keep PyAV below 19 until the upstream fix is in a
+# released Faster-Whisper version.
+faster-whisper>=1.0,<2.0
+av<19
+kokoro-onnx>=0.5.0
+soundfile>=0.13
+piper-tts>=1.5.0
 # sentence-transformers>=3.0 # resume/document embeddings
 # qdrant-client>=1.9         # RAG vector store
