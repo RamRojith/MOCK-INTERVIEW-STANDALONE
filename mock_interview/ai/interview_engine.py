@@ -299,7 +299,13 @@ def generate_question(session, sequence_number, previous_answer=""):
         try:
             from mock_interview.ai import ollama_client
 
-            qmodel = ollama_client.last_used_model() or configured_model("interactive")
+            meta = ollama_client.get_last_request_meta()
+            if meta.get("successful_model") and meta.get("role") == "question":
+                qmodel = meta.get("successful_model")
+            elif meta.get("successful_model") and not meta.get("role"):
+                qmodel = meta.get("successful_model")
+            else:
+                qmodel = configured_model("interactive")
         except Exception:
             qmodel = configured_model("interactive")
         question_data = _question_data_from_result(result, qmodel)

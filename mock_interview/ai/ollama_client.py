@@ -58,6 +58,17 @@ def _parse_route_list(value):
     return result
 
 
+_ROLE_ROUTE_MAP = {
+    "report": "LLM_ROUTE_REPORT",
+    "question": "LLM_ROUTE_QUESTION",
+    "questions": "LLM_ROUTE_QUESTION",
+    "interactive": "LLM_ROUTE_INTERACTIVE",
+    "evaluation": "LLM_ROUTE_EVALUATION",
+    "eval": "LLM_ROUTE_EVALUATION",
+    "evaluate": "LLM_ROUTE_EVALUATION",
+}
+
+
 def _get_route_candidates(role=None, primary_model=None):
     cfg = getattr(settings, "MOCK_INTERVIEW", {}) or {}
     role = (role or "").strip().lower()
@@ -65,15 +76,7 @@ def _get_route_candidates(role=None, primary_model=None):
     candidates = []
     if primary_model:
         candidates.append(primary_model)
-    route_key = None
-    if role == "report":
-        route_key = "LLM_ROUTE_REPORT"
-    elif role in ("interactive", "question", "questions"):
-        route_key = "LLM_ROUTE_INTERACTIVE"
-    elif role in ("evaluation", "eval", "evaluate"):
-        route_key = "LLM_ROUTE_EVALUATION"
-    elif role == "question":
-        route_key = "LLM_ROUTE_QUESTION"
+    route_key = _ROLE_ROUTE_MAP.get(role)
     if route_key and route_key in cfg:
         for m in _parse_route_list(cfg.get(route_key)):
             if m and m not in candidates:
@@ -158,10 +161,23 @@ def _classify_error(exc):
     if isinstance(exc, requests.exceptions.HTTPError):
         resp = getattr(exc, "response", None)
         status = getattr(resp, "status_code", None)
-        if status and status >= 500:
+        if status == 408:
+            return "timeout"
+        if status == 425:
             return "server_error"
+        if status == 429:
+            return "rate_limited"
         if status == 404:
             return "model_unavailable"
+        if status and 400 <= status < 500:
+            # Don't retry most client errors
+            if status in (400, 422):
+                return "bad_request"
+            if status in (401, 403):
+                return "auth_error"
+            return "client_error"
+        if status and status >= 500:
+            return "server_error"
         return "http_error"
     if isinstance(exc, json.JSONDecodeError):
         return "invalid_json"
@@ -180,23 +196,26 @@ def _classify_error(exc):
 
 
 def _is_retryable_error(exc):
-    # Do not swallow programming bugs / malformed requests
-    if isinstance(exc, (SyntaxError, AttributeError, ValueError)) and not isinstance(exc, (json.JSONDecodeError,)):
-        # Only retry if clearly model/output related
-        pass
     category = _classify_error(exc)
     retryable = {
         "timeout",
         "connection_error",
         "server_error",
         "model_unavailable",
-        "http_error",
+        "rate_limited",
         "invalid_json",
         "missing_fields",
         "type_error",
         "schema_invalid",
         "local_model_error",
     }
+    non_retryable = {
+        "bad_request",
+        "auth_error",
+        "client_error",
+    }
+    if category in non_retryable:
+        return False
     # Be conservative: don't retry arbitrary ValueError not from model output
     if isinstance(exc, ValueError) and not isinstance(exc, json.JSONDecodeError):
         return False
